@@ -1,0 +1,40 @@
+name: 'SemaFore - End-to-End Encrypted Notifications'
+description: 'Post end-to-end encrypted notifications to your SemaFore organisation from any GitHub Actions workflow.'
+branding:
+  icon: 'lock'
+  color: 'blue'
+inputs:
+  token:
+    required: true
+    description: 'Service token. Store this as a GitHub Actions secret.'
+  device_key:
+    required: false
+    description: 'Device private key. Required for notify mode and must come from a GitHub Actions secret.'
+  mode:
+    required: true
+    default: 'notify'
+    description: 'notify | execute | bootstrap'
+  target:
+    required: false
+    description: 'org | group:<id> | user:<id> for notify mode.'
+  template:
+    required: false
+    description: 'Message template. GitHub expressions are resolved before this Action runs.'
+  action:
+    required: false
+    description: 'Execute action name: create_thread | archive_thread | audit_event.'
+  params:
+    required: false
+    description: 'JSON params for the execute action.'
+  severity:
+    required: false
+    description: 'Optional severity tag.'
+  api_base_url:
+    required: false
+    description: 'SemaFore API base URL. Defaults to production.'
+  github_token:
+    required: false
+    description: 'GitHub token with actions: write permission for bootstrap mode.'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
