@@ -6,7 +6,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "ncc build src/main.ts --license licenses.txt --source-map --out dist",
+    "build": "ncc build src/main.ts --license licenses.txt --source-map --out dist && perl -pi -e 's/[ \\t]+$//' dist/index.js",
     "check": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
@@ -32,9 +32,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@actions/core": "^1.11.1",
-    "@actions/github": "^9.1.1",
-    "libsodium-wrappers": "^0.7.15"
+    "@actions/core": "^1.11.1"
   },
   "overrides": {
     "undici": "^6.24.0"
