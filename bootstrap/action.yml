@@ -1,0 +1,15 @@
+name: 'SemaFore Bootstrap'
+description: 'Register a SemaFore GitHub Actions device and write its private state to repo secrets.'
+inputs:
+  bootstrap_token:
+    required: true
+    description: 'Bootstrap-capability token. Store this as a GitHub Actions secret.'
+  api_base_url:
+    required: false
+    description: 'SemaFore API base URL. Defaults to production.'
+  github_token:
+    required: false
+    description: 'GitHub token with actions: write permission. Defaults to GITHUB_TOKEN.'
+runs:
+  using: 'node20'
+  main: '../dist/index.js'

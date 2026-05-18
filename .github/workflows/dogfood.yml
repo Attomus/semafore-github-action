@@ -1,0 +1,22 @@
+name: Dogfood
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    if: ${{ vars.SEMAFORE_DOGFOOD_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Attomus/semafore-github-action@v1
+        with:
+          token: ${{ secrets.SEMAFORE_TOKEN }}
+          device_key: ${{ secrets.SEMAFORE_DEVICE_KEY }}
+          mode: notify
+          target: org
+          template: 'semafore-github-action main updated: {{sha}}'

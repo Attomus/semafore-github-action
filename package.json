@@ -1,0 +1,51 @@
+{
+  "name": "semafore-github-action",
+  "version": "0.1.0",
+  "description": "GitHub Action for end-to-end encrypted SemaFore workflow notifications",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/main.ts --license licenses.txt --source-map --out dist",
+    "check": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "verify": "npm run lint && npm run check && npm run test && npm run build && npm audit --audit-level=high"
+  },
+  "keywords": [
+    "github-action",
+    "semafore",
+    "notifications",
+    "encryption"
+  ],
+  "author": "Attomus",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Attomus/semafore-github-action.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Attomus/semafore-github-action/issues"
+  },
+  "homepage": "https://github.com/Attomus/semafore-github-action#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^9.1.1",
+    "libsodium-wrappers": "^0.7.15"
+  },
+  "overrides": {
+    "undici": "^6.24.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "@vercel/ncc": "^0.38.3",
+    "eslint": "^10.4.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.59.3",
+    "vitest": "^4.1.6"
+  }
+}
