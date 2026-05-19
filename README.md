@@ -25,7 +25,7 @@ Implemented today:
 Still in active development:
 
 - full notify-mode recipient lookup and per-device encryption
-- bootstrap integration with the published `@attomus/semafore-crypto` package
+- bootstrap integration with the `@attomus/semafore-crypto` package
 - end-to-end staging runs against the SemaFore integration endpoints
 - Marketplace release packaging and `v1` tag movement
 
