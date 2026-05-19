@@ -32,7 +32,7 @@ Still in active development:
 The public API, inputs, and examples may change before the first Marketplace
 release.
 
-## Notify Example
+## Planned Notify Example
 
 ```yaml
 name: Notify SemaFore
@@ -54,7 +54,7 @@ jobs:
           template: 'Build {{run_id}} on {{ref}} completed at ${{ github.sha }}'
 ```
 
-## One-Time Bootstrap
+## Planned One-Time Bootstrap
 
 ```yaml
 name: Bootstrap SemaFore
