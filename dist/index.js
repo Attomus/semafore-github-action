@@ -31320,13 +31320,13 @@ function parseInputs(raw, logger = coreLogger) {
     const mode = normalizeMode(raw.mode);
     const apiBaseUrl = normalizeApiBaseUrl(raw.apiBaseUrl);
     const token = mode === 'bootstrap' ? required(raw.bootstrapToken ?? raw.token, 'bootstrap_token') : required(raw.token, 'token');
-    protectSensitiveInput(token, 'SEMAFORE_TOKEN', logger);
+    protectSensitiveInput(token, 'SEMAFORE_TOKEN', logger, raw.allowUnsafeSecretInputs === true);
     if (mode === 'bootstrap') {
         return { mode, token, apiBaseUrl };
     }
     if (mode === 'notify') {
         const deviceKey = required(raw.deviceKey, 'device_key');
-        protectSensitiveInput(deviceKey, 'SEMAFORE_DEVICE_KEY', logger);
+        protectSensitiveInput(deviceKey, 'SEMAFORE_DEVICE_KEY', logger, raw.allowUnsafeSecretInputs === true);
         const notify = {
             mode,
             token,
@@ -31403,8 +31403,11 @@ function optionalNonEmpty(value) {
     const trimmed = value?.trim();
     return trimmed ? trimmed : undefined;
 }
-function protectSensitiveInput(value, label, logger) {
+function protectSensitiveInput(value, label, logger, allowUnsafeSecretInputs) {
     logger.setSecret(value);
+    if (allowUnsafeSecretInputs) {
+        return;
+    }
     if (looksLikeUnsafeLiteral(value)) {
         throw new Error('SEMAFORE_TOKEN and SEMAFORE_DEVICE_KEY must be stored as GitHub Actions secrets, not literals or variables.');
     }
@@ -31414,12 +31417,17 @@ function protectSensitiveInput(value, label, logger) {
 }
 function looksLikeUnsafeLiteral(value) {
     const normalized = value.toLowerCase();
-    return (normalized.includes('replace-me') ||
+    return (normalized.startsWith('${{') ||
+        normalized.includes('replace-me') ||
         normalized.includes('changeme') ||
         normalized.includes('example') ||
+        normalized.includes('not-a-secret') ||
+        normalized.includes('paste-token-here') ||
         normalized.includes('literal') ||
         normalized === 'token' ||
-        normalized === 'device_key');
+        normalized === 'device_key' ||
+        normalized === 'semafore_token' ||
+        normalized === 'semafore_device_key');
 }
 function inferModeFromActionPath() {
     const actionPath = process.env.GITHUB_ACTION_PATH ?? '';
@@ -31491,7 +31499,7 @@ async function runNotify(inputs, client, logger) {
     logger.setSecret(inputs.token);
     logger.setSecret(inputs.deviceKey);
     const body = renderTemplate(inputs.template, githubContextFromEnv());
-    throw new Error(`Notify is scaffolded but blocked until @attomus/semafore-crypto is published and integration recipient endpoints are live. Rendered body length: ${body.length}. Client ready: ${Boolean(client)}.`);
+    throw new Error(`Notify is scaffolded but blocked until @attomus/semafore-crypto is published and encrypted envelopes can be produced. Rendered body length: ${body.length}. Client ready: ${Boolean(client)}.`);
 }
 
 ;// CONCATENATED MODULE: ./src/secrets.ts
@@ -31532,7 +31540,25 @@ class GitHubRepoSecretWriter {
         if (!name.trim() || !value.trim()) {
             throw new Error('secret name and value are required');
         }
+        await this.fetchPublicKey();
         throw new Error('GitHub secret writing is blocked until bootstrap depends on the published crypto package.');
+    }
+    async fetchPublicKey() {
+        const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/actions/secrets/public-key`, {
+            headers: {
+                accept: 'application/vnd.github+json',
+                authorization: `Bearer ${this.githubToken}`,
+                'x-github-api-version': '2022-11-28'
+            }
+        });
+        if (!response.ok) {
+            throw new Error(`GitHub public key lookup failed with status ${response.status}.`);
+        }
+        const body = (await response.json());
+        if (!body.key_id || !body.key) {
+            throw new Error('GitHub public key response was missing key_id or key.');
+        }
+        return { key_id: body.key_id, key: body.key };
     }
 }
 

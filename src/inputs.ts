@@ -54,6 +54,7 @@ export interface RawInputs {
   readonly params?: string | undefined;
   readonly severity?: string | undefined;
   readonly apiBaseUrl?: string | undefined;
+  readonly allowUnsafeSecretInputs?: boolean | undefined;
 }
 
 export function readInputs(logger: Logger = coreLogger): ActionInputs {
@@ -78,7 +79,7 @@ export function parseInputs(raw: RawInputs, logger: Logger = coreLogger): Action
   const mode = normalizeMode(raw.mode);
   const apiBaseUrl = normalizeApiBaseUrl(raw.apiBaseUrl);
   const token = mode === 'bootstrap' ? required(raw.bootstrapToken ?? raw.token, 'bootstrap_token') : required(raw.token, 'token');
-  protectSensitiveInput(token, 'SEMAFORE_TOKEN', logger);
+  protectSensitiveInput(token, 'SEMAFORE_TOKEN', logger, raw.allowUnsafeSecretInputs === true);
 
   if (mode === 'bootstrap') {
     return { mode, token, apiBaseUrl };
@@ -86,7 +87,7 @@ export function parseInputs(raw: RawInputs, logger: Logger = coreLogger): Action
 
   if (mode === 'notify') {
     const deviceKey = required(raw.deviceKey, 'device_key');
-    protectSensitiveInput(deviceKey, 'SEMAFORE_DEVICE_KEY', logger);
+    protectSensitiveInput(deviceKey, 'SEMAFORE_DEVICE_KEY', logger, raw.allowUnsafeSecretInputs === true);
     const notify: NotifyInputs = {
       mode,
       token,
@@ -172,8 +173,11 @@ function optionalNonEmpty(value?: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function protectSensitiveInput(value: string, label: string, logger: Logger): void {
+function protectSensitiveInput(value: string, label: string, logger: Logger, allowUnsafeSecretInputs: boolean): void {
   logger.setSecret(value);
+  if (allowUnsafeSecretInputs) {
+    return;
+  }
   if (looksLikeUnsafeLiteral(value)) {
     throw new Error(
       'SEMAFORE_TOKEN and SEMAFORE_DEVICE_KEY must be stored as GitHub Actions secrets, not literals or variables.'
@@ -187,12 +191,17 @@ function protectSensitiveInput(value: string, label: string, logger: Logger): vo
 function looksLikeUnsafeLiteral(value: string): boolean {
   const normalized = value.toLowerCase();
   return (
+    normalized.startsWith('${{') ||
     normalized.includes('replace-me') ||
     normalized.includes('changeme') ||
     normalized.includes('example') ||
+    normalized.includes('not-a-secret') ||
+    normalized.includes('paste-token-here') ||
     normalized.includes('literal') ||
     normalized === 'token' ||
-    normalized === 'device_key'
+    normalized === 'device_key' ||
+    normalized === 'semafore_token' ||
+    normalized === 'semafore_device_key'
   );
 }
 

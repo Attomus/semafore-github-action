@@ -11,8 +11,10 @@ export interface ExecuteRequest {
 
 export interface NotifyRequest {
   readonly target: unknown;
-  readonly bodyPreviewLength: number;
   readonly severity?: string;
+  readonly metadata: {
+    readonly bodyLength: number;
+  };
   readonly envelopes: unknown[];
 }
 

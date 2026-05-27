@@ -10,6 +10,9 @@ inputs:
   github_token:
     required: false
     description: 'GitHub token with actions: write permission. Defaults to GITHUB_TOKEN.'
+outputs:
+  device_id:
+    description: 'Registered SemaFore device identifier.'
 runs:
   using: 'node20'
   main: '../dist/index.js'
