@@ -10,6 +10,6 @@ export async function runNotify(inputs: NotifyInputs, client: SemaForeClient, lo
   const body = renderTemplate(inputs.template, githubContextFromEnv());
 
   throw new Error(
-    `Notify is scaffolded but blocked until @attomus/semafore-crypto is published and integration recipient endpoints are live. Rendered body length: ${body.length}. Client ready: ${Boolean(client)}.`
+    `Notify is scaffolded but blocked until @attomus/semafore-crypto is published and encrypted envelopes can be produced. Rendered body length: ${body.length}. Client ready: ${Boolean(client)}.`
   );
 }

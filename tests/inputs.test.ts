@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseInputs } from '../src/inputs.js';
 import type { Logger } from '../src/logger.js';
@@ -12,6 +12,10 @@ const logger: Logger = {
 };
 
 describe('input parsing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('parses notify inputs', () => {
     const parsed = parseInputs(
       {
@@ -49,6 +53,39 @@ describe('input parsing', () => {
         logger
       )
     ).toThrow('must be stored as GitHub Actions secrets');
+  });
+
+  it('rejects unresolved GitHub expressions for sensitive inputs', () => {
+    expect(() =>
+      parseInputs(
+        {
+          mode: 'notify',
+          token: '${{ vars.SEMAFORE_TOKEN }}',
+          deviceKey: 'sem_device_key_value_that_is_long',
+          target: 'org',
+          template: 'Hello'
+        },
+        logger
+      )
+    ).toThrow('must be stored as GitHub Actions secrets');
+  });
+
+  it('can bypass literal checks for controlled unit-test fixtures', () => {
+    const parsed = parseInputs(
+      {
+        mode: 'notify',
+        token: 'replace-me',
+        deviceKey: 'not-a-secret',
+        target: 'org',
+        template: 'Hello',
+        allowUnsafeSecretInputs: true
+      },
+      logger
+    );
+
+    expect(parsed).toMatchObject({ mode: 'notify', target: { kind: 'org' } });
+    expect(logger.setSecret).toHaveBeenCalledWith('replace-me');
+    expect(logger.setSecret).toHaveBeenCalledWith('not-a-secret');
   });
 
   it('validates execute params as an object', () => {
