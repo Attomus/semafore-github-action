@@ -35,6 +35,13 @@ inputs:
   github_token:
     required: false
     description: 'GitHub token with actions: write permission for bootstrap mode.'
+outputs:
+  message_id:
+    description: 'SemaFore message identifier returned by notify mode.'
+  result:
+    description: 'JSON result returned by execute mode.'
+  device_id:
+    description: 'Registered SemaFore device identifier returned by bootstrap mode.'
 runs:
   using: 'node20'
   main: 'dist/index.js'

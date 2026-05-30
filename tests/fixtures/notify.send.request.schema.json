@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contracts/integrations/notify.send.request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["message_id", "envelopes", "metadata"],
+  "properties": {
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "envelopes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recipient_user_id", "recipient_device_id", "ciphertext", "dr_header"],
+        "properties": {
+          "recipient_user_id": { "type": "string", "minLength": 1 },
+          "recipient_device_id": { "type": "string", "minLength": 1 },
+          "ciphertext": { "type": "string", "minLength": 1 },
+          "dr_header": {
+            "type": "string",
+            "pattern": "^(534d4431|534D4431|534d5831|534D5831)[0-9a-fA-F]*$",
+            "minLength": 8
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["integration_kind"],
+      "properties": {
+        "sender_kind": { "type": "string", "enum": ["integration"] },
+        "integration_kind": { "type": "string", "minLength": 1 },
+        "sender_display": { "type": "string" }
+      }
+    }
+  }
+}
