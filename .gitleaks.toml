@@ -1,0 +1,5 @@
+[allowlist]
+description = "Bundle artefacts contain non-secret strings that match generic secret patterns; the source they are bundled from is scanned separately."
+paths = [
+  '''dist/.*''',
+]
