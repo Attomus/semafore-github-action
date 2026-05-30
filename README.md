@@ -18,13 +18,15 @@ Implemented today:
 - secret-origin checks for sensitive inputs
 - GitHub Actions log masking for tokens and device keys
 - SemaFore execute-mode HTTP client
+- notify-mode recipient resolution, per-device encryption, and ADR-0166 send
 - bootstrap secret-writing helper
+- runtime dependency on `@attomus/semafore-crypto`
 - bundled `dist/` output
 - lint, type-check, test, build, and audit workflow
 
 Still in active development:
 
-- full notify-mode recipient lookup and per-device encryption
+- live service-token recipient/key-bundle resolution endpoint for notify mode
 - bootstrap integration with the `@attomus/semafore-crypto` package
 - end-to-end staging runs against the SemaFore integration endpoints
 - Marketplace release packaging and `v1` tag movement

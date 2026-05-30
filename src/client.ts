@@ -9,11 +9,61 @@ export interface ExecuteRequest {
   readonly params: Record<string, unknown>;
 }
 
-export interface NotifyRequest {
-  readonly target: unknown;
-  readonly bodyPreviewLength: number;
-  readonly severity?: string;
-  readonly envelopes: unknown[];
+export interface NotifyTargetRequest {
+  readonly target: {
+    readonly kind: 'org' | 'group' | 'user';
+    readonly id?: string;
+  };
+}
+
+export interface NotifyRecipientDevice {
+  readonly recipient_user_id: string;
+  readonly recipient_device_id: string;
+  readonly key_bundle: RecipientKeyBundle;
+}
+
+export interface RecipientKeyBundle {
+  readonly identity_key: string;
+  readonly identity_signing_key: string;
+  readonly signed_pre_key: {
+    readonly key_id: string;
+    readonly public_key: string;
+    readonly signature: string;
+  };
+  readonly one_time_pre_key?: {
+    readonly key_id: string;
+    readonly public_key: string;
+  } | null;
+}
+
+export interface NotifyRecipientResponse {
+  readonly recipients: NotifyRecipientDevice[];
+}
+
+export interface NotifySendEnvelope {
+  readonly recipient_user_id: string;
+  readonly recipient_device_id: string;
+  readonly ciphertext: string;
+  readonly dr_header: string;
+}
+
+export interface NotifySendRequest {
+  readonly message_id: string;
+  readonly envelopes: NotifySendEnvelope[];
+  readonly metadata: {
+    readonly sender_kind: 'integration';
+    readonly integration_kind: 'github_action';
+    readonly sender_display?: string;
+  };
+}
+
+export interface NotifySendResponse {
+  readonly delivery_id: string;
+  readonly message_id: string;
+  readonly envelope_count: number;
+  readonly status: 'accepted' | 'duplicate';
+  readonly accepted_at: string;
+  readonly prior_delivery_id?: string;
 }
 
 export class SemaForeClient {
@@ -27,7 +77,11 @@ export class SemaForeClient {
     return this.postJson('/api/integrations/bootstrap/device/register', _request);
   }
 
-  async sendNotification(request: NotifyRequest): Promise<{ message_id?: string }> {
+  async listNotifyRecipients(request: NotifyTargetRequest): Promise<NotifyRecipientResponse> {
+    return this.postJson('/api/integrations/notify/recipients', request);
+  }
+
+  async sendNotification(request: NotifySendRequest): Promise<NotifySendResponse> {
     return this.postJson('/api/integrations/notify/send', request);
   }
 

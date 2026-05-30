@@ -31244,6 +31244,9 @@ class SemaForeClient {
     async registerDevice(_request) {
         return this.postJson('/api/integrations/bootstrap/device/register', _request);
     }
+    async listNotifyRecipients(request) {
+        return this.postJson('/api/integrations/notify/recipients', request);
+    }
     async sendNotification(request) {
         return this.postJson('/api/integrations/notify/send', request);
     }
@@ -31443,6 +31446,8509 @@ const actionLogger = {
     setOutput: core.setOutput
 };
 
+// EXTERNAL MODULE: external "node:crypto"
+var external_node_crypto_ = __nccwpck_require__(7598);
+;// CONCATENATED MODULE: ./node_modules/@noble/ciphers/utils.js
+/**
+ * Utilities for hex, bytes, CSPRNG.
+ * @module
+ */
+/*! noble-ciphers - MIT License (c) 2023 Paul Miller (paulmillr.com) */
+/**
+ * Checks if something is Uint8Array. Be careful: nodejs Buffer will return true.
+ * @param a - Value to inspect.
+ * @returns `true` when the value is a Uint8Array view, including Node's `Buffer`.
+ * @example
+ * Guards a value before treating it as raw key material.
+ *
+ * ```ts
+ * isBytes(new Uint8Array());
+ * ```
+ */
+function utils_isBytes(a) {
+    // Plain `instanceof Uint8Array` is too strict for some Buffer / proxy /
+    // cross-realm cases. The fallback still requires a real ArrayBuffer view
+    // so plain JSON-deserialized `{ constructor: ... }`
+    // spoofing is rejected, and `BYTES_PER_ELEMENT === 1` keeps the fallback on byte-oriented views.
+    return (a instanceof Uint8Array ||
+        (ArrayBuffer.isView(a) &&
+            a.constructor.name === 'Uint8Array' &&
+            'BYTES_PER_ELEMENT' in a &&
+            a.BYTES_PER_ELEMENT === 1));
+}
+/**
+ * Asserts something is boolean.
+ * @param b - Value to validate.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Validates a boolean option before branching on it.
+ *
+ * ```ts
+ * abool(true);
+ * ```
+ */
+function abool(b) {
+    if (typeof b !== 'boolean')
+        throw new TypeError(`boolean expected, not ${b}`);
+}
+/**
+ * Asserts something is a non-negative safe integer.
+ * @param n - Value to validate.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Validates a non-negative length or counter.
+ *
+ * ```ts
+ * anumber(1);
+ * ```
+ */
+function utils_anumber(n) {
+    if (typeof n !== 'number')
+        throw new TypeError('number expected, got ' + typeof n);
+    if (!Number.isSafeInteger(n) || n < 0)
+        throw new RangeError('positive integer expected, got ' + n);
+}
+/**
+ * Asserts something is Uint8Array.
+ * @param value - Value to validate.
+ * @param length - Expected byte length.
+ * @param title - Optional label used in error messages.
+ * @returns The validated byte array.
+ * On Node, `Buffer` is accepted too because it is a Uint8Array view.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument lengths. {@link RangeError}
+ * @example
+ * Validates a fixed-length nonce or key buffer.
+ *
+ * ```ts
+ * abytes(new Uint8Array([1, 2]), 2);
+ * ```
+ */
+function utils_abytes(value, length, title = '') {
+    const bytes = utils_isBytes(value);
+    const len = value?.length;
+    const needsLen = length !== undefined;
+    if (!bytes || (needsLen && len !== length)) {
+        const prefix = title && `"${title}" `;
+        const ofLen = needsLen ? ` of length ${length}` : '';
+        const got = bytes ? `length=${len}` : `type=${typeof value}`;
+        const message = prefix + 'expected Uint8Array' + ofLen + ', got ' + got;
+        if (!bytes)
+            throw new TypeError(message);
+        throw new RangeError(message);
+    }
+    return value;
+}
+/**
+ * Asserts a hash- or MAC-like instance has not been destroyed or finished.
+ * @param instance - Stateful instance to validate.
+ * @param checkFinished - Whether to reject finished instances.
+ * When `false`, only `destroyed` is checked.
+ * @throws If the hash instance has already been destroyed or finalized. {@link Error}
+ * @example
+ * Guards against calling `update()` or `digest()` on a finished hash.
+ *
+ * ```ts
+ * aexists({ destroyed: false, finished: false });
+ * ```
+ */
+function aexists(instance, checkFinished = true) {
+    if (instance.destroyed)
+        throw new Error('Hash instance has been destroyed');
+    if (checkFinished && instance.finished)
+        throw new Error('Hash#digest() has already been called');
+}
+/**
+ * Asserts output is a properly-sized byte array.
+ * @param out - Output buffer to validate.
+ * @param instance - Hash-like instance providing `outputLen`.
+ * This is the relaxed `digestInto()`-style contract: output must be at least `outputLen`,
+ * unlike one-shot cipher helpers elsewhere in the repo that often require exact lengths.
+ * @throws On wrong argument types. {@link TypeError}
+ * @param onlyAligned - Whether `out` must be 4-byte aligned for zero-allocation word views.
+ * @throws On wrong output buffer lengths. {@link RangeError}
+ * @throws On wrong output buffer alignment. {@link Error}
+ * @example
+ * Verifies that a caller-provided output buffer is large enough.
+ *
+ * ```ts
+ * aoutput(new Uint8Array(16), { outputLen: 16 });
+ * ```
+ */
+function aoutput(out, instance, onlyAligned = false) {
+    utils_abytes(out, undefined, 'output');
+    const min = instance.outputLen;
+    if (out.length < min) {
+        throw new RangeError('digestInto() expects output buffer of length at least ' + min);
+    }
+    if (onlyAligned && !isAligned32(out))
+        throw new Error('invalid output, must be aligned');
+}
+/**
+ * Casts a typed-array view to Uint8Array.
+ * @param arr - Typed-array view to reinterpret.
+ * @returns Uint8Array view over the same bytes.
+ * @example
+ * Views 32-bit words as raw bytes without copying.
+ *
+ * ```ts
+ * u8(new Uint32Array([1]));
+ * ```
+ */
+function u8(arr) {
+    return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+/**
+ * Casts a typed-array view to Uint32Array.
+ * @param arr - Typed-array view to reinterpret.
+ * @returns Uint32Array view over the same bytes. Callers are expected to provide a
+ * 4-byte-aligned offset; trailing `1..3` bytes are silently dropped.
+ * @example
+ * Views a byte buffer as 32-bit words for block processing.
+ *
+ * ```ts
+ * u32(new Uint8Array(4));
+ * ```
+ */
+function u32(arr) {
+    return new Uint32Array(arr.buffer, arr.byteOffset, Math.floor(arr.byteLength / 4));
+}
+/**
+ * Zeroizes typed arrays in place.
+ * Warning: JS provides no guarantees.
+ * @param arrays - Arrays to wipe.
+ * @example
+ * Wipes a temporary key buffer after use.
+ *
+ * ```ts
+ * const bytes = new Uint8Array([1]);
+ * clean(bytes);
+ * ```
+ */
+function clean(...arrays) {
+    for (let i = 0; i < arrays.length; i++) {
+        arrays[i].fill(0);
+    }
+}
+/**
+ * Creates a DataView for byte-level manipulation.
+ * @param arr - Typed-array view to wrap.
+ * @returns DataView over the same bytes.
+ * @example
+ * Creates an endian-aware view for length encoding.
+ *
+ * ```ts
+ * createView(new Uint8Array(4));
+ * ```
+ */
+function createView(arr) {
+    return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+/**
+ * Whether the current platform is little-endian.
+ * Most are; some IBM systems are not.
+ */
+const isLE = /* @__PURE__ */ (() => new Uint8Array(new Uint32Array([0x11223344]).buffer)[0] === 0x44)();
+/**
+ * Reverses byte order of one 32-bit word.
+ * @param word - Unsigned 32-bit word to swap.
+ * @returns The same word with bytes reversed.
+ * @example
+ * Swaps a big-endian word into little-endian byte order.
+ *
+ * ```ts
+ * byteSwap(0x11223344);
+ * ```
+ */
+const byteSwap = (word) => ((word << 24) & 0xff000000) |
+    ((word << 8) & 0xff0000) |
+    ((word >>> 8) & 0xff00) |
+    ((word >>> 24) & 0xff);
+/**
+ * Normalizes one 32-bit word to the little-endian representation expected by cipher cores.
+ * @param n - Unsigned 32-bit word to normalize.
+ * @returns Little-endian normalized word on big-endian hosts, else the input word unchanged.
+ * @example
+ * Normalizes a host-endian word before passing it into an ARX/AES core.
+ *
+ * ```ts
+ * swap8IfBE(0x11223344);
+ * ```
+ */
+const swap8IfBE = isLE
+    ? (n) => n
+    : (n) => byteSwap(n) >>> 0;
+/**
+ * Byte-swaps every word of a Uint32Array in place.
+ * @param arr - Uint32Array whose words should be swapped.
+ * @returns The same array after in-place byte swapping.
+ * @example
+ * Swaps every 32-bit word in a word-view buffer.
+ *
+ * ```ts
+ * byteSwap32(new Uint32Array([0x11223344]));
+ * ```
+ */
+const byteSwap32 = (arr) => {
+    for (let i = 0; i < arr.length; i++)
+        arr[i] = byteSwap(arr[i]);
+    return arr;
+};
+/**
+ * Normalizes a Uint32Array view to the little-endian representation expected by cipher cores.
+ * @param u - Word view to normalize in place.
+ * @returns Little-endian normalized word view.
+ * @example
+ * Normalizes a word-view buffer before block processing.
+ *
+ * ```ts
+ * swap32IfBE(new Uint32Array([0x11223344]));
+ * ```
+ */
+const swap32IfBE = isLE
+    ? (u) => u
+    : byteSwap32;
+// Built-in hex conversion:
+// {@link https://caniuse.com/mdn-javascript_builtins_uint8array_fromhex | caniuse entry}
+const hasHexBuiltin = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() =>
+// @ts-ignore
+typeof Uint8Array.from([]).toHex === 'function' && typeof Uint8Array.fromHex === 'function')()));
+// Array where index 0xf0 (240) is mapped to string 'f0'
+const hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+/**
+ * Convert byte array to hex string. Uses built-in function, when available.
+ * @param bytes - Bytes to encode.
+ * @returns Lowercase hexadecimal string.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Formats ciphertext bytes for logs or test vectors.
+ *
+ * ```ts
+ * bytesToHex(Uint8Array.from([0xca, 0xfe, 0x01, 0x23])); // 'cafe0123'
+ * ```
+ */
+function bytesToHex(bytes) {
+    utils_abytes(bytes);
+    // @ts-ignore
+    if (hasHexBuiltin)
+        return bytes.toHex();
+    // pre-caching improves the speed 6x
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+        hex += hexes[bytes[i]];
+    }
+    return hex;
+}
+// We use optimized technique to convert hex string to byte array
+const asciis = { _0: 48, _9: 57, A: 65, F: 70, a: 97, f: 102 };
+function asciiToBase16(ch) {
+    if (ch >= asciis._0 && ch <= asciis._9)
+        return ch - asciis._0; // '2' => 50-48
+    if (ch >= asciis.A && ch <= asciis.F)
+        return ch - (asciis.A - 10); // 'B' => 66-(65-10)
+    if (ch >= asciis.a && ch <= asciis.f)
+        return ch - (asciis.a - 10); // 'b' => 98-(97-10)
+    return;
+}
+/**
+ * Convert hex string to byte array. Uses built-in function, when available.
+ * @param hex - Hexadecimal string to decode.
+ * @returns Decoded bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On malformed hexadecimal input. {@link RangeError}
+ * @example
+ * Parses a hex test vector into bytes.
+ *
+ * ```ts
+ * hexToBytes('cafe0123'); // Uint8Array.from([0xca, 0xfe, 0x01, 0x23])
+ * ```
+ */
+function hexToBytes(hex) {
+    if (typeof hex !== 'string')
+        throw new TypeError('hex string expected, got ' + typeof hex);
+    if (hasHexBuiltin) {
+        try {
+            return Uint8Array.fromHex(hex);
+        }
+        catch (error) {
+            if (error instanceof SyntaxError)
+                throw new RangeError(error.message);
+            throw error;
+        }
+    }
+    const hl = hex.length;
+    const al = hl / 2;
+    if (hl % 2)
+        throw new RangeError('hex string expected, got unpadded hex of length ' + hl);
+    const array = new Uint8Array(al);
+    for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
+        const n1 = asciiToBase16(hex.charCodeAt(hi));
+        const n2 = asciiToBase16(hex.charCodeAt(hi + 1));
+        if (n1 === undefined || n2 === undefined) {
+            const char = hex[hi] + hex[hi + 1];
+            throw new RangeError('hex string expected, got non-hex character "' + char + '" at index ' + hi);
+        }
+        array[ai] = n1 * 16 + n2; // multiply first octet, e.g. 'a3' => 10*16+3 => 160 + 3 => 163
+    }
+    return array;
+}
+// Used in micro
+/**
+ * Converts a big-endian hex string into bigint.
+ * @param hex - Hexadecimal string without `0x`.
+ * @returns Parsed bigint value. The empty string is treated as `0n`.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Parses a big-endian field element or counter from hex.
+ *
+ * ```ts
+ * hexToNumber('ff');
+ * ```
+ */
+function hexToNumber(hex) {
+    if (typeof hex !== 'string')
+        throw new TypeError('hex string expected, got ' + typeof hex);
+    return BigInt(hex === '' ? '0' : '0x' + hex); // Big Endian
+}
+// Used in ff1
+// BE: Big Endian, LE: Little Endian
+/**
+ * Converts big-endian bytes into bigint.
+ * @param bytes - Big-endian bytes.
+ * @returns Parsed bigint value. Empty input is treated as `0n`.
+ * @throws On invalid byte input passed to the internal hex conversion. {@link TypeError}
+ * @example
+ * Reads a big-endian integer from serialized bytes.
+ *
+ * ```ts
+ * bytesToNumberBE(new Uint8Array([1, 0]));
+ * ```
+ */
+function utils_bytesToNumberBE(bytes) {
+    return hexToNumber(bytesToHex(bytes));
+}
+// Used in micro, ff1
+/**
+ * Converts a number into big-endian bytes of fixed length.
+ * @param n - Number to encode.
+ * @param len - Output length in bytes.
+ * @returns Big-endian bytes padded to `len`.
+ * Validation is indirect through `hexToBytes(...)`, so negative values, `len = 0`,
+ * and values that do not fit surface through the downstream hex parser instead of a
+ * dedicated range guard here.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws If the requested output length cannot represent the encoded value. {@link RangeError}
+ * @example
+ * Encodes a counter as fixed-width big-endian bytes.
+ *
+ * ```ts
+ * numberToBytesBE(1, 2);
+ * ```
+ */
+function utils_numberToBytesBE(n, len) {
+    // Reject coercible non-numeric inputs before string/hex conversion changes behavior.
+    if (typeof n === 'number')
+        utils_anumber(n);
+    else if (typeof n !== 'bigint')
+        throw new TypeError(`number or bigint expected, got ${typeof n}`);
+    utils_anumber(len);
+    return hexToBytes(n.toString(16).padStart(len * 2, '0'));
+}
+/**
+ * Converts string to bytes using UTF8 encoding.
+ * @param str - String to encode.
+ * @returns UTF-8 bytes in a detached fresh Uint8Array copy.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Encodes application text before encryption or MACing.
+ *
+ * ```ts
+ * utf8ToBytes('abc'); // new Uint8Array([97, 98, 99])
+ * ```
+ */
+function utf8ToBytes(str) {
+    if (typeof str !== 'string')
+        throw new TypeError('string expected');
+    return new Uint8Array(new TextEncoder().encode(str)); // {@link https://bugzil.la/1681809 | Firefox bug 1681809}
+}
+/**
+ * Converts bytes to string using UTF8 encoding.
+ * @param bytes - UTF-8 bytes.
+ * @returns Decoded string. Input validation is delegated to `TextDecoder`, and malformed
+ * UTF-8 is replacement-decoded instead of rejected.
+ * @example
+ * Decodes UTF-8 plaintext back into a string.
+ *
+ * ```ts
+ * bytesToUtf8(new Uint8Array([97, 98, 99])); // 'abc'
+ * ```
+ */
+function bytesToUtf8(bytes) {
+    return new TextDecoder().decode(bytes);
+}
+/**
+ * Checks if two U8A use same underlying buffer and overlaps.
+ * This is invalid and can corrupt data.
+ * @param a - First byte view.
+ * @param b - Second byte view.
+ * @returns `true` when the views overlap in memory.
+ * @example
+ * Detects whether two slices alias the same backing buffer.
+ *
+ * ```ts
+ * overlapBytes(new Uint8Array(4), new Uint8Array(4));
+ * ```
+ */
+function overlapBytes(a, b) {
+    // Zero-length views cannot overwrite anything, even if their offset sits inside another range.
+    if (!a.byteLength || !b.byteLength)
+        return false;
+    return (a.buffer === b.buffer && // best we can do, may fail with an obscure Proxy
+        a.byteOffset < b.byteOffset + b.byteLength && // a starts before b end
+        b.byteOffset < a.byteOffset + a.byteLength // b starts before a end
+    );
+}
+/**
+ * If input and output overlap and input starts before output, we will overwrite end of input before
+ * we start processing it, so this is not supported for most ciphers
+ * (except chacha/salsa, which were designed for this)
+ * @param input - Input bytes.
+ * @param output - Output bytes.
+ * @throws If the output view would overwrite unread input bytes. {@link Error}
+ * @example
+ * Rejects an in-place layout that would overwrite unread input bytes.
+ *
+ * ```ts
+ * complexOverlapBytes(new Uint8Array(4), new Uint8Array(4));
+ * ```
+ */
+function complexOverlapBytes(input, output) {
+    // This is very cursed. It works somehow, but I'm completely unsure,
+    // reasoning about overlapping aligned windows is very hard.
+    if (overlapBytes(input, output) && input.byteOffset < output.byteOffset)
+        throw new Error('complex overlap of input and output is not supported');
+}
+/**
+ * Copies several Uint8Arrays into one.
+ * @param arrays - Byte arrays to concatenate.
+ * @returns Combined byte array.
+ * @throws On wrong argument types inside the byte-array list. {@link TypeError}
+ * @example
+ * Builds a `nonce || ciphertext` style buffer.
+ *
+ * ```ts
+ * concatBytes(new Uint8Array([1]), new Uint8Array([2]));
+ * ```
+ */
+function concatBytes(...arrays) {
+    let sum = 0;
+    for (let i = 0; i < arrays.length; i++) {
+        const a = arrays[i];
+        utils_abytes(a);
+        sum += a.length;
+    }
+    const res = new Uint8Array(sum);
+    for (let i = 0, pad = 0; i < arrays.length; i++) {
+        const a = arrays[i];
+        res.set(a, pad);
+        pad += a.length;
+    }
+    return res;
+}
+/**
+ * Merges user options into defaults.
+ * @param defaults - Default option values.
+ * @param opts - User-provided overrides.
+ * @returns Combined options object.
+ * The merge mutates `defaults` in place and returns the same object.
+ * @throws If options are missing or not an object. {@link Error}
+ * @example
+ * Applies user overrides to the default cipher options.
+ *
+ * ```ts
+ * checkOpts({ rounds: 20 }, { rounds: 8 });
+ * ```
+ */
+function checkOpts(defaults, opts) {
+    if (opts == null || typeof opts !== 'object')
+        throw new Error('options must be defined');
+    const merged = Object.assign(defaults, opts);
+    return merged;
+}
+/**
+ * Compares two byte arrays in kinda constant time once lengths already match.
+ * @param a - First byte array.
+ * @param b - Second byte array.
+ * @returns `true` when the arrays contain the same bytes. Different lengths still return early.
+ * @example
+ * Compares an expected authentication tag with the received one.
+ *
+ * ```ts
+ * equalBytes(new Uint8Array([1]), new Uint8Array([1]));
+ * ```
+ */
+function equalBytes(a, b) {
+    if (a.length !== b.length)
+        return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++)
+        diff |= a[i] ^ b[i];
+    return diff === 0;
+}
+/**
+ * Wraps a keyed MAC constructor into a one-shot helper with `.create()`.
+ * @param keyLen - Valid probe-key length used to read static metadata once.
+ * The probe key is only used for `outputLen` / `blockLen`, so callers with several valid key sizes
+ * can pass any representative size as long as those values stay fixed.
+ * @param macCons - Keyed MAC constructor or factory.
+ * @param fromMsg - Optional adapter that derives extra constructor args from the one-shot message.
+ * @returns Callable MAC helper with `.create()`.
+ */
+function wrapMacConstructor(keyLen, macCons, fromMsg) {
+    const mac = macCons;
+    const getArgs = (fromMsg || (() => []));
+    const macC = (msg, key) => mac(key, ...getArgs(msg))
+        .update(msg)
+        .digest();
+    const tmp = mac(new Uint8Array(keyLen), ...getArgs(new Uint8Array(0)));
+    macC.outputLen = tmp.outputLen;
+    macC.blockLen = tmp.blockLen;
+    macC.create = (key, ...args) => mac(key, ...args);
+    return macC;
+}
+/**
+ * Wraps a cipher: validates args, ensures encrypt() can only be called once.
+ * Used internally by the exported cipher constructors.
+ * Output-buffer support is inferred from the wrapped `encrypt` / `decrypt`
+ * arity (`fn.length === 2`), and tag-bearing constructors are expected to use
+ * `args[1]` for optional AAD.
+ * @__NO_SIDE_EFFECTS__
+ * @param params - Static cipher metadata. See {@link CipherParams}.
+ * @param constructor - Cipher constructor.
+ * @returns Wrapped constructor with validation.
+ */
+const wrapCipher = (params, constructor) => {
+    function wrappedCipher(key, ...args) {
+        // Validate key
+        utils_abytes(key, undefined, 'key');
+        // Validate nonce if nonceLength is present
+        if (params.nonceLength !== undefined) {
+            const nonce = args[0];
+            utils_abytes(nonce, params.varSizeNonce ? undefined : params.nonceLength, 'nonce');
+        }
+        // Validate AAD if tagLength present
+        const tagl = params.tagLength;
+        if (tagl && args[1] !== undefined)
+            utils_abytes(args[1], undefined, 'AAD');
+        const cipher = constructor(key, ...args);
+        const checkOutput = (fnLength, output) => {
+            if (output !== undefined) {
+                if (fnLength !== 2)
+                    throw new Error('cipher output not supported');
+                utils_abytes(output, undefined, 'output');
+            }
+        };
+        // Create wrapped cipher with validation and single-use encryption
+        let called = false;
+        const wrCipher = {
+            encrypt(data, output) {
+                if (called)
+                    throw new Error('cannot encrypt() twice with same key + nonce');
+                called = true;
+                utils_abytes(data);
+                checkOutput(cipher.encrypt.length, output);
+                return cipher.encrypt(data, output);
+            },
+            decrypt(data, output) {
+                utils_abytes(data);
+                if (tagl && data.length < tagl)
+                    throw new Error('"ciphertext" expected length bigger than tagLength=' + tagl);
+                checkOutput(cipher.decrypt.length, output);
+                return cipher.decrypt(data, output);
+            },
+        };
+        return wrCipher;
+    }
+    Object.assign(wrappedCipher, params);
+    return wrappedCipher;
+};
+/**
+ * By default, returns u8a of length.
+ * When out is available, it checks it for validity and uses it.
+ * @param expectedLength - Required output length.
+ * @param out - Optional destination buffer.
+ * @param onlyAligned - Whether `out` must be 4-byte aligned.
+ * @returns Output buffer ready for writing.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws If the provided output buffer has the wrong size or alignment. {@link Error}
+ * @example
+ * Reuses a caller-provided output buffer when lengths match.
+ *
+ * ```ts
+ * getOutput(16, new Uint8Array(16));
+ * ```
+ */
+function getOutput(expectedLength, out, onlyAligned = true) {
+    if (out === undefined)
+        return new Uint8Array(expectedLength);
+    // Keep Buffer/cross-realm Uint8Array support here instead of trusting a shape-compatible object.
+    utils_abytes(out, undefined, 'output');
+    if (out.length !== expectedLength)
+        throw new Error('"output" expected Uint8Array of length ' + expectedLength + ', got: ' + out.length);
+    if (onlyAligned && !isAligned32(out))
+        throw new Error('invalid output, must be aligned');
+    return out;
+}
+/**
+ * Encodes data and AAD bit lengths into a 16-byte buffer.
+ * @param dataLength - Data length in bits.
+ * @param aadLength - AAD length in bits.
+ * The serialized block is still `aadLength || dataLength`, matching GCM/Poly1305
+ * conventions even though the helper parameter order is `(dataLength, aadLength)`.
+ * @param isLE - Whether to encode lengths as little-endian.
+ * @returns 16-byte length block.
+ * @throws On wrong argument types passed to the endian validator. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Builds the length block appended by GCM and Poly1305.
+ *
+ * ```ts
+ * u64Lengths(16, 8, true);
+ * ```
+ */
+function u64Lengths(dataLength, aadLength, isLE) {
+    // Reject coercible non-number lengths like '10' and true before BigInt(...) accepts them.
+    utils_anumber(dataLength);
+    utils_anumber(aadLength);
+    abool(isLE);
+    const num = new Uint8Array(16);
+    const view = createView(num);
+    view.setBigUint64(0, BigInt(aadLength), isLE);
+    view.setBigUint64(8, BigInt(dataLength), isLE);
+    return num;
+}
+/**
+ * Checks whether a byte array is aligned to a 4-byte offset.
+ * @param bytes - Byte array to inspect.
+ * @returns `true` when the view is 4-byte aligned.
+ * @example
+ * Checks whether a buffer can be safely viewed as Uint32Array.
+ *
+ * ```ts
+ * isAligned32(new Uint8Array(4));
+ * ```
+ */
+function isAligned32(bytes) {
+    return bytes.byteOffset % 4 === 0;
+}
+/**
+ * Copies bytes into a new Uint8Array.
+ * @param bytes - Bytes to copy.
+ * @returns Copied byte array.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Copies input into an aligned Uint8Array before block processing.
+ *
+ * ```ts
+ * copyBytes(new Uint8Array([1, 2]));
+ * ```
+ */
+function utils_copyBytes(bytes) {
+    // `Uint8Array.from(...)` would also accept arrays / other typed arrays. Keep this helper strict
+    // because callers use it at byte-validation boundaries before mutating the detached copy.
+    return Uint8Array.from(utils_abytes(bytes));
+}
+/**
+ * Cryptographically secure PRNG.
+ * Uses internal OS-level `crypto.getRandomValues`.
+ * @param bytesLength - Number of bytes to produce.
+ * Validation is delegated to `Uint8Array(bytesLength)` and `getRandomValues`, so
+ * non-integers, negative lengths, and oversize requests surface backend/runtime errors.
+ * @returns Random byte array.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @throws If the runtime does not expose `crypto.getRandomValues`. {@link Error}
+ * @example
+ * Generates a fresh nonce or key.
+ *
+ * ```ts
+ * randomBytes(16);
+ * ```
+ */
+function randomBytes(bytesLength = 32) {
+    // Validate upfront so fractional / coercible lengths do not silently
+    // truncate through Uint8Array().
+    utils_anumber(bytesLength);
+    const cr = typeof globalThis === 'object' ? globalThis.crypto : null;
+    if (typeof cr?.getRandomValues !== 'function')
+        throw new Error('crypto.getRandomValues must be defined');
+    return cr.getRandomValues(new Uint8Array(bytesLength));
+}
+/**
+ * Uses CSPRNG for nonce, nonce injected in ciphertext.
+ * For `encrypt`, a `nonceBytes`-length buffer is fetched from CSPRNG and
+ * prepended to encrypted ciphertext. For `decrypt`, first `nonceBytes` of ciphertext
+ * are treated as nonce. The wrapper always allocates a fresh `nonce || ciphertext`
+ * buffer on encrypt and intentionally does not support caller-provided destination buffers.
+ * Too-short decrypt inputs are split into short/empty nonce views and then delegated
+ * to the wrapped cipher instead of being rejected here first.
+ *
+ * NOTE: Under the same key, using random nonces (e.g. `managedNonce`) with AES-GCM and ChaCha
+ * should be limited to `2**23` (8M) messages to get a collision chance of
+ * `2**-50`. Stretching to `2**32` (4B) messages would raise that chance to
+ * `2**-33`, still negligible but creeping up.
+ * @param fn - Cipher constructor that expects a nonce.
+ * @param randomBytes_ - Random-byte source used for nonce generation.
+ * @returns Cipher constructor that prepends the nonce to ciphertext.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On invalid nonce lengths observed at wrapper construction or use. {@link RangeError}
+ * @example
+ * Prepends a fresh random nonce to every ciphertext.
+ *
+ * ```ts
+ * import { gcm } from '@noble/ciphers/aes.js';
+ * import { managedNonce, randomBytes } from '@noble/ciphers/utils.js';
+ * const wrapped = managedNonce(gcm);
+ * const key = randomBytes(16);
+ * const ciphertext = wrapped(key).encrypt(new Uint8Array([1, 2, 3]));
+ * wrapped(key).decrypt(ciphertext);
+ * ```
+ */
+function managedNonce(fn, randomBytes_ = randomBytes) {
+    const { nonceLength } = fn;
+    utils_anumber(nonceLength);
+    const addNonce = (nonce, ciphertext, plaintext) => {
+        const out = concatBytes(nonce, ciphertext);
+        // Wrapped ciphers may alias caller plaintext on encrypt(); never zero
+        // caller-owned buffers here.
+        if (!overlapBytes(plaintext, ciphertext))
+            ciphertext.fill(0);
+        return out;
+    };
+    // NOTE: we cannot support DST here, it would be mistake:
+    // - we don't know how much dst length cipher requires
+    // - nonce may unalign dst and break everything
+    // - we create new u8a anyway (concatBytes)
+    // - previously we passed all args to cipher, but that was mistake!
+    const res = ((key, ...args) => ({
+        encrypt(plaintext) {
+            utils_abytes(plaintext);
+            const nonce = randomBytes_(nonceLength);
+            const encrypted = fn(key, nonce, ...args).encrypt(plaintext);
+            // @ts-ignore
+            if (encrypted instanceof Promise)
+                return encrypted.then((ct) => addNonce(nonce, ct, plaintext));
+            return addNonce(nonce, encrypted, plaintext);
+        },
+        decrypt(ciphertext) {
+            utils_abytes(ciphertext);
+            const nonce = ciphertext.subarray(0, nonceLength);
+            const decrypted = ciphertext.subarray(nonceLength);
+            return fn(key, nonce, ...args).decrypt(decrypted);
+        },
+    }));
+    // Auto-nonce wrappers still preserve the wrapped payload geometry.
+    if ('blockSize' in fn)
+        res.blockSize = fn.blockSize;
+    if ('tagLength' in fn)
+        res.tagLength = fn.tagLength;
+    return res;
+}
+//# sourceMappingURL=utils.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/ciphers/_polyval.js
+/**
+ * GHash from AES-GCM and its little-endian "mirror image" Polyval from AES-SIV.
+ *
+ * Implemented in terms of GHash with conversion function for keys
+ * GCM GHASH from
+ * {@link https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38d.pdf | NIST SP800-38d},
+ * SIV from
+ * {@link https://www.rfc-editor.org/rfc/rfc8452 | RFC 8452}.
+ *
+ * GHASH   modulo: x^128 + x^7   + x^2   + x     + 1
+ * POLYVAL modulo: x^128 + x^127 + x^126 + x^121 + 1
+ *
+ * @module
+ */
+
+const BLOCK_SIZE = 16;
+// TODO: rewrite
+// temporary padding buffer
+// ZEROS32 aliases these bytes, so clean(ZEROS32) also resets this shared tail-padding scratch.
+const ZEROS16 = /* @__PURE__ */ new Uint8Array(16);
+const ZEROS32 = /* @__PURE__ */ u32(ZEROS16);
+// GHASH reduces modulo x^128 + x^7 + x^2 + x + 1, so the low-degree terms
+// x^7 + x^2 + x + 1 become bits `11100001` = 0xe1 in R = 0xe1 || 0^120.
+const POLY = 0xe1;
+// v = 2*v % POLY
+// NOTE: because x + x = 0 (add/sub is same), mul2(x) != x+x
+// Montgomery ladder can multiply any field element with this doubling step;
+// addition stays simple xor.
+const mul2 = (s0, s1, s2, s3) => {
+    const hiBit = s3 & 1;
+    return {
+        s3: (s2 << 31) | (s3 >>> 1),
+        s2: (s1 << 31) | (s2 >>> 1),
+        s1: (s0 << 31) | (s1 >>> 1),
+        // NIST SP 800-38D §6.3 applies `V >> 1` and XORs R on carry. In this
+        // 4x32-bit split, R = 0xe1 || 0^120 lives in the top byte of s0.
+        s0: (s0 >>> 1) ^ ((POLY << 24) & -(hiBit & 1)), // reduce % poly
+    };
+};
+// Per-word part of RFC 8452 `ByteReverse`; callers also reverse the 32-bit word order.
+const swapLE = (n) => (((n >>> 0) & 0xff) << 24) |
+    (((n >>> 8) & 0xff) << 16) |
+    (((n >>> 16) & 0xff) << 8) |
+    ((n >>> 24) & 0xff) |
+    0;
+// POLYVAL first applies RFC 8452's per-word byte reversal, then re-normalizes
+// host-endian u32 loads to the little-endian word value `_updateBlock()` expects.
+const swap8IfLE = (n) => swap8IfBE(swapLE(n));
+/**
+ * `mulX_GHASH(ByteReverse(H))` from RFC 8452 Appendix A.
+ * @param k mutated in place
+ */
+function _toGHASHKey(k) {
+    // The input is the original POLYVAL key H; reverse() materializes
+    // RFC 8452's `ByteReverse(H)` before the GHASH mulX step.
+    k.reverse();
+    const hiBit = k[15] & 1;
+    // k >>= 1
+    let carry = 0;
+    for (let i = 0; i < k.length; i++) {
+        const t = k[i];
+        k[i] = (t >>> 1) | carry;
+        carry = (t & 1) << 7;
+    }
+    k[0] ^= -hiBit & 0xe1; // if (hiBit) n ^= 0xe1000000000000000000000000000000;
+    return k;
+}
+// Precompute-window heuristic only: larger inputs trade memory for fewer table lookups.
+// Any caller-provided length hint still collapses to one of the supported windows {2, 4, 8}.
+const estimateWindow = (bytes) => {
+    if (bytes > 64 * 1024)
+        return 8;
+    if (bytes > 1024)
+        return 4;
+    return 2;
+};
+/**
+ * Incremental GHASH state for AES-GCM.
+ * @param key - 16-byte GHASH key.
+ * @param expectedLength - Expected message length for table sizing.
+ * Chunking is segment-based, not hash-streaming: every `update()` call is zero-padded
+ * to the next 16-byte boundary before it is absorbed. This matches the internal AES/GCM
+ * use where AAD, payload, and length block are separate padded segments.
+ * @example
+ * Feeds one ciphertext block into an incremental GHASH state with a fresh hash key.
+ *
+ * ```ts
+ * import { GHASH } from '@noble/ciphers/_polyval.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const mac = new GHASH(key);
+ * mac.update(new Uint8Array(16));
+ * mac.digest();
+ * ```
+ */
+class GHASH {
+    blockLen = BLOCK_SIZE;
+    outputLen = BLOCK_SIZE;
+    s0 = 0;
+    s1 = 0;
+    s2 = 0;
+    s3 = 0;
+    finished = false;
+    destroyed = false;
+    t;
+    W;
+    windowSize;
+    // We select bits per window adaptively based on expectedLength
+    constructor(key, expectedLength) {
+        utils_abytes(key, 16, 'key');
+        key = utils_copyBytes(key);
+        const kView = createView(key);
+        let k0 = kView.getUint32(0, false);
+        let k1 = kView.getUint32(4, false);
+        let k2 = kView.getUint32(8, false);
+        let k3 = kView.getUint32(12, false);
+        // generate table of doubled keys (half of montgomery ladder)
+        const doubles = [];
+        for (let i = 0; i < 128; i++) {
+            doubles.push({ s0: swapLE(k0), s1: swapLE(k1), s2: swapLE(k2), s3: swapLE(k3) });
+            ({ s0: k0, s1: k1, s2: k2, s3: k3 } = mul2(k0, k1, k2, k3));
+        }
+        const W = estimateWindow(expectedLength || 1024);
+        if (![1, 2, 4, 8].includes(W))
+            throw new Error('ghash: invalid window size, expected 2, 4 or 8');
+        this.W = W;
+        const bits = 128; // always 128 bits;
+        const windows = bits / W;
+        const windowSize = (this.windowSize = 2 ** W);
+        const items = [];
+        // Create precompute table for window of W bits
+        for (let w = 0; w < windows; w++) {
+            // truth table: 00, 01, 10, 11
+            for (let byte = 0; byte < windowSize; byte++) {
+                // prettier-ignore
+                let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+                for (let j = 0; j < W; j++) {
+                    const bit = (byte >>> (W - j - 1)) & 1;
+                    if (!bit)
+                        continue;
+                    const { s0: d0, s1: d1, s2: d2, s3: d3 } = doubles[W * w + j];
+                    ((s0 ^= d0), (s1 ^= d1), (s2 ^= d2), (s3 ^= d3));
+                }
+                items.push({ s0, s1, s2, s3 });
+            }
+        }
+        this.t = items;
+    }
+    _updateBlock(s0, s1, s2, s3) {
+        ((s0 ^= this.s0), (s1 ^= this.s1), (s2 ^= this.s2), (s3 ^= this.s3));
+        const { W, t, windowSize } = this;
+        // prettier-ignore
+        let o0 = 0, o1 = 0, o2 = 0, o3 = 0;
+        const mask = (1 << W) - 1; // 2**W will kill performance.
+        let w = 0;
+        // NIST SP 800-38D §6.3 interprets blocks as little-endian polynomials,
+        // so the lookup walk consumes each word byte-by-byte from
+        // least-significant to most-significant bits.
+        for (const num of [s0, s1, s2, s3]) {
+            for (let bytePos = 0; bytePos < 4; bytePos++) {
+                const byte = (num >>> (8 * bytePos)) & 0xff;
+                for (let bitPos = 8 / W - 1; bitPos >= 0; bitPos--) {
+                    const bit = (byte >>> (W * bitPos)) & mask;
+                    const { s0: e0, s1: e1, s2: e2, s3: e3 } = t[w * windowSize + bit];
+                    ((o0 ^= e0), (o1 ^= e1), (o2 ^= e2), (o3 ^= e3));
+                    w += 1;
+                }
+            }
+        }
+        this.s0 = o0;
+        this.s1 = o1;
+        this.s2 = o2;
+        this.s3 = o3;
+    }
+    update(data) {
+        aexists(this);
+        utils_abytes(data);
+        data = utils_copyBytes(data);
+        const b32 = u32(data);
+        const blocks = Math.floor(data.length / BLOCK_SIZE);
+        const left = data.length % BLOCK_SIZE;
+        for (let i = 0; i < blocks; i++) {
+            this._updateBlock(swap8IfBE(b32[i * 4 + 0]), swap8IfBE(b32[i * 4 + 1]), swap8IfBE(b32[i * 4 + 2]), swap8IfBE(b32[i * 4 + 3]));
+        }
+        if (left) {
+            ZEROS16.set(data.subarray(blocks * BLOCK_SIZE));
+            // Tail blocks go through the shared ZEROS32 scratch, so they need the same host-endian
+            // normalization as full blocks; otherwise segmented GHASH/POLYVAL updates diverge on BE.
+            this._updateBlock(swap8IfBE(ZEROS32[0]), swap8IfBE(ZEROS32[1]), swap8IfBE(ZEROS32[2]), swap8IfBE(ZEROS32[3]));
+            clean(ZEROS32); // clean tmp buffer
+        }
+        return this;
+    }
+    destroy() {
+        // `aexists(this)` guards update/digest paths, so destroy must mark the instance unusable too.
+        this.destroyed = true;
+        const { t } = this;
+        // Wipe the key-derived precompute table; scalar accumulator words remain,
+        // but the destroyed guard blocks further use.
+        // clean precompute table
+        for (const elm of t) {
+            ((elm.s0 = 0), (elm.s1 = 0), (elm.s2 = 0), (elm.s3 = 0));
+        }
+    }
+    digestInto(out) {
+        aexists(this);
+        // `digestInto(out)` is the no-allocation fast path, so callers must pass a
+        // 32-bit-aligned buffer before we reinterpret it with `u32(out)`.
+        aoutput(out, this, true);
+        this.finished = true;
+        // NIST SP 800-38D §6.4 returns the final 128-bit block Y_m.
+        // `digestInto()` follows the relaxed `aoutput()` contract, so only
+        // out[0..15] may be touched.
+        const { s0, s1, s2, s3 } = this;
+        const o32 = u32(out);
+        o32[0] = s0;
+        o32[1] = s1;
+        o32[2] = s2;
+        o32[3] = s3;
+        swap32IfBE(o32);
+    }
+    digest() {
+        const res = new Uint8Array(BLOCK_SIZE);
+        this.digestInto(res);
+        // `res` is independent of internal state, so it stays valid after destroy() wipes the table.
+        this.destroy();
+        return res;
+    }
+}
+/**
+ * Incremental POLYVAL state for AES-SIV.
+ * @param key - 16-byte POLYVAL key.
+ * @param expectedLength - Expected message length for table sizing.
+ * Inherits GHASH's segment-padded `update()` behavior: each call is padded
+ * independently to a 16-byte boundary before absorption.
+ * @example
+ * Feeds one block into an incremental POLYVAL state with a fresh hash key.
+ *
+ * ```ts
+ * import { Polyval } from '@noble/ciphers/_polyval.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const mac = new Polyval(key);
+ * mac.update(new Uint8Array(16));
+ * mac.digest();
+ * ```
+ */
+class Polyval extends GHASH {
+    constructor(key, expectedLength) {
+        utils_abytes(key);
+        // RFC 8452 Appendix A converts the POLYVAL key with
+        // `mulX_GHASH(ByteReverse(H))`; copy first because `_toGHASHKey(...)`
+        // mutates in place.
+        const ghKey = _toGHASHKey(utils_copyBytes(key));
+        super(ghKey, expectedLength);
+        clean(ghKey);
+    }
+    update(data) {
+        aexists(this);
+        utils_abytes(data);
+        data = utils_copyBytes(data);
+        const b32 = u32(data);
+        const left = data.length % BLOCK_SIZE;
+        const blocks = Math.floor(data.length / BLOCK_SIZE);
+        for (let i = 0; i < blocks; i++) {
+            // RFC 8452 Appendix A feeds `ByteReverse(X_i)` into GHASH, so POLYVAL
+            // reverses the 32-bit word order in addition to the per-word byte swap.
+            this._updateBlock(swap8IfLE(b32[i * 4 + 3]), swap8IfLE(b32[i * 4 + 2]), swap8IfLE(b32[i * 4 + 1]), swap8IfLE(b32[i * 4 + 0]));
+        }
+        if (left) {
+            ZEROS16.set(data.subarray(blocks * BLOCK_SIZE));
+            this._updateBlock(swap8IfLE(ZEROS32[3]), swap8IfLE(ZEROS32[2]), swap8IfLE(ZEROS32[1]), swap8IfLE(ZEROS32[0]));
+            clean(ZEROS32);
+        }
+        return this;
+    }
+    digestInto(out) {
+        aexists(this);
+        // `digestInto(out)` is the no-allocation fast path, so callers must pass a
+        // 32-bit-aligned buffer before we reinterpret the output prefix with `u32(view)`.
+        aoutput(out, this, true);
+        this.finished = true;
+        // RFC 8452 Appendix A maps POLYVAL output back through `ByteReverse(...)`.
+        // `digestInto()` follows the relaxed `aoutput()` contract, so only out[0..15] may be touched.
+        const view = out.subarray(0, this.outputLen);
+        const { s0, s1, s2, s3 } = this;
+        const o32 = u32(view);
+        o32[0] = s0;
+        o32[1] = s1;
+        o32[2] = s2;
+        o32[3] = s3;
+        swap32IfBE(o32);
+        view.reverse();
+    }
+}
+/**
+ * GHash MAC for AES-GCM.
+ * @param msg - Message bytes to authenticate.
+ * @param key - 16-byte GHASH key.
+ * @returns 16-byte authentication tag.
+ * @example
+ * Authenticates a short message with GHASH and a fresh hash key.
+ *
+ * ```ts
+ * import { ghash } from '@noble/ciphers/_polyval.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * ghash(new Uint8Array(), key);
+ * ```
+ */
+const ghash =
+/* @__PURE__ */ wrapMacConstructor(16, (key, expectedLength) => new GHASH(key, expectedLength), (msg) => [msg.length]);
+/**
+ * POLYVAL MAC for AES-SIV.
+ * @param msg - Message bytes to authenticate.
+ * @param key - 16-byte POLYVAL key.
+ * @returns 16-byte authentication tag.
+ * @example
+ * Authenticates a short message with POLYVAL and a fresh hash key.
+ *
+ * ```ts
+ * import { polyval } from '@noble/ciphers/_polyval.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * polyval(new Uint8Array(), key);
+ * ```
+ */
+const polyval =
+/* @__PURE__ */ wrapMacConstructor(16, (key, expectedLength) => new Polyval(key, expectedLength), (msg) => [msg.length]);
+//# sourceMappingURL=_polyval.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/ciphers/aes.js
+/**
+ * {@link https://en.wikipedia.org/wiki/Advanced_Encryption_Standard | AES}
+ * a.k.a. Advanced Encryption Standard
+ * is a variant of Rijndael block cipher, standardized by NIST in 2001.
+ * We provide the fastest available pure JS implementation.
+ *
+ * `cipher = encrypt(block, key)`
+ *
+ * Data is split into 128-bit blocks.
+ * Encrypted in 10/12/14 rounds (128/192/256 bits). In every round:
+ * 1. **S-box**, table substitution
+ * 2. **Shift rows**, cyclic shift left of all rows of data array
+ * 3. **Mix columns**, multiplying every column by fixed polynomial
+ * 4. **Add round key**, round_key xor i-th column of array
+ *
+ * Check out
+ * {@link https://csrc.nist.gov/files/pubs/fips/197/final/docs/fips-197.pdf | FIPS-197},
+ * {@link https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-38G.pdf | NIST 800-38G},
+ * and {@link https://csrc.nist.gov/csrc/media/projects/cryptographic-standards-and-guidelines/documents/aes-development/rijndael-ammended.pdf | original proposal}.
+ * @module
+ */
+
+// prettier-ignore
+
+const aes_BLOCK_SIZE = 16;
+// AES operates on 16-byte blocks, i.e. 4 32-bit words.
+const BLOCK_SIZE32 = 4;
+// Shared zero block (`0^128`) used by GCM's `H = CIPH_K(0^128)` / J0 scratch
+// and by CMAC / SIV helpers; callers take `.slice()` before mutating it.
+const EMPTY_BLOCK = /* @__PURE__ */ new Uint8Array(aes_BLOCK_SIZE);
+// RFC 5297 §2.1 / §2.4: S2V uses `<one> = 0^127 || 1` for the `n = 0` special case.
+const ONE_BLOCK = /* @__PURE__ */ Uint8Array.from([
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+]);
+const aes_POLY = 0x11b; // 1 + x + x**3 + x**4 + x**8
+// Validates plain AES key sizes only; AES-SIV's doubled-key contract is checked elsewhere.
+function validateKeyLength(key) {
+    if (![16, 24, 32].includes(key.length))
+        throw new Error('"aes key" expected Uint8Array of length 16/24/32, got length=' + key.length);
+}
+// TODO: remove multiplication, binary ops only
+// Doubles one GF(2^8) field element; callers are expected to stay in byte range.
+// FIPS 197 upd1 §4.3 equation (4.5): XTIMES(b) left-shifts by one and, when
+// b7=1, reduces by m(x); using POLY=0x11b here yields the same byte result
+// as XORing with {1b} after the shift.
+function aes_mul2(n) {
+    return (n << 1) ^ (aes_POLY & -(n >> 7));
+}
+// Shift-and-add multiplication in GF(2^8); callers are expected to pass byte values.
+// FIPS 197 upd1 §4.3 equation (4.7): general products are XORs of repeated
+// XTIMES() multiples, e.g. {57}•{13} = {57}⊕{ae}⊕{07}.
+function mul(a, b) {
+    let res = 0;
+    for (; b > 0; b >>= 1) {
+        // Usual shift-and-add step in GF(2^8), not a scalar-multiplication ladder.
+        res ^= a & -(b & 1); // if (b&1) res ^=a (but const-time).
+        a = aes_mul2(a); // a = 2*a
+    }
+    return res;
+}
+/**
+ * Increments a counter block with wrap around.
+ * AES call sites here currently use the big-endian branch, but the helper supports both layouts.
+ * NIST SP 800-38A Appendix B.1 and SP 800-38D §6.2 increment the
+ * least-significant/rightmost bits.
+ * `isLE=false` matches that standard counter-block layout, while `isLE=true`
+ * is a generic extension for non-AES callers.
+ * The implementation keeps a 32-bit bitwise carry path, so `carry` is capped at `0xffffff00`;
+ * larger values throw instead of silently overflowing before the next-byte propagation step.
+ */
+// Keep the helper explicitly typed so `--isolatedDeclarations` can expose it
+// through the test-only `__TESTS` export without inference errors.
+const incBytes = (data, isLE, carry = 1) => {
+    // Keep `carry + byte <= 0xffffffff` so the `| 0` / `>>> 8` path below
+    // never truncates a real carry bit.
+    if (!Number.isSafeInteger(carry) || carry > 0xffffff00)
+        throw new Error('incBytes: wrong carry ' + carry);
+    utils_abytes(data);
+    for (let i = 0; i < data.length; i++) {
+        const pos = !isLE ? data.length - 1 - i : i;
+        carry = (carry + (data[pos] & 0xff)) | 0;
+        data[pos] = carry & 0xff;
+        carry >>>= 8;
+    }
+};
+// AES S-box is generated using finite field inversion,
+// an affine transform, and xor of a constant 0x63.
+const sbox = /* @__PURE__ */ (() => {
+    const t = new Uint8Array(256);
+    // Repeated multiplication by {03} walks all 255 nonzero field elements
+    // once, so t[255 - i] is the multiplicative inverse of t[i] for the
+    // affine step.
+    for (let i = 0, x = 1; i < 256; i++, x ^= aes_mul2(x))
+        t[i] = x;
+    const box = new Uint8Array(256);
+    // FIPS 197 upd1 §5.1.1: SBOX({00}) = {63} because the inverse step leaves
+    // {00} at {00}, then the affine transform xors in c = {63}.
+    box[0] = 0x63;
+    for (let i = 0; i < 255; i++) {
+        let x = t[255 - i];
+        x |= x << 8;
+        box[t[i]] = (x ^ (x >> 4) ^ (x >> 5) ^ (x >> 6) ^ (x >> 7) ^ 0x63) & 0xff;
+    }
+    clean(t);
+    return box;
+})();
+// FIPS 197 upd1 §5.3.2: INVSBOX() is derived from SBOX() by swapping input
+// and output roles (Table 6).
+// `indexOf` is only used once at module init, so the quadratic setup cost stays off hot paths.
+const invSbox = /* @__PURE__ */ sbox.map((_, j) => sbox.indexOf(j));
+// FIPS 197 upd1 §5.2: ROTWORD([a0,a1,a2,a3]) = [a1,a2,a3,a0]; with this LE
+// word packing that is a right rotate by 8 bits.
+const rotr32_8 = (n) => (n << 24) | (n >>> 8);
+// LE T-table helper: rotates one precomputed word by one byte so T1/T2/T3
+// reuse T0's substitution/mix result in the other byte lanes.
+const rotl32_8 = (n) => (n << 8) | (n >>> 24);
+// T-table is optimization suggested in 5.2 of original proposal (missed from FIPS-197). Changes:
+// - LE instead of BE
+// - bigger tables: T0 and T1 are merged into T01 table and T2 & T3 into T23;
+//   so index is u16, instead of u8. This speeds up things, unexpectedly
+function genTtable(sbox, fn) {
+    if (sbox.length !== 256)
+        throw new Error('Wrong sbox length');
+    const T0 = new Uint32Array(256).map((_, j) => fn(sbox[j]));
+    const T1 = T0.map(rotl32_8);
+    const T2 = T1.map(rotl32_8);
+    const T3 = T2.map(rotl32_8);
+    // Pre-xor adjacent lanes so apply0123/applySbox can fetch two substituted
+    // byte lanes per lookup in the LE round layout.
+    const T01 = new Uint32Array(256 * 256);
+    const T23 = new Uint32Array(256 * 256);
+    const sbox2 = new Uint16Array(256 * 256);
+    for (let i = 0; i < 256; i++) {
+        for (let j = 0; j < 256; j++) {
+            const idx = i * 256 + j;
+            T01[idx] = T0[i] ^ T1[j];
+            T23[idx] = T2[i] ^ T3[j];
+            sbox2[idx] = (sbox[i] << 8) | sbox[j];
+        }
+    }
+    return { sbox, sbox2, T0, T1, T2, T3, T01, T23 };
+}
+// Forward round precompute: the packed word stores the MIXCOLUMNS row
+// [{02},{01},{01},{03}] in LE byte-lane order, and the returned `sbox2`
+// is also reused by key expansion and the final round.
+const tableEncoding = /* @__PURE__ */ genTtable(sbox, (s) => (mul(s, 3) << 24) | (s << 16) | (s << 8) | mul(s, 2));
+// Inverse round precompute: the packed word stores the INVMIXCOLUMNS row
+// [{0e},{09},{0d},{0b}] in LE byte-lane order, and the tables are reused
+// by decrypt() and expandKeyDecLE().
+const tableDecoding = /* @__PURE__ */ genTtable(invSbox, (s) => (mul(s, 11) << 24) | (mul(s, 13) << 16) | (mul(s, 9) << 8) | mul(s, 14));
+// FIPS 197 upd1 §5.2 Table 5: left-most bytes of Rcon[j] = x^(j-1), generated by repeated XTIMES().
+const xPowers = /* @__PURE__ */ (() => {
+    const p = new Uint8Array(16);
+    for (let i = 0, x = 1; i < 16; i++, x = aes_mul2(x))
+        p[i] = x;
+    return p;
+})();
+/** Forward AES key expansion used across ECB/CBC/CTR/GCM/CMAC/KW-style paths. */
+function expandKeyLE(key) {
+    utils_abytes(key);
+    const len = key.length;
+    validateKeyLength(key);
+    const { sbox2 } = tableEncoding;
+    const toClean = [];
+    // Copy on BE or misaligned inputs so the LE word normalization below never
+    // mutates caller key bytes in place.
+    if (!isLE || !isAligned32(key))
+        toClean.push((key = utils_copyBytes(key)));
+    const k32 = swap32IfBE(u32(key));
+    const Nk = k32.length;
+    // `applySbox` normally reads one byte lane from each argument; repeating
+    // `n` across all four lanes turns it into SUBWORD(n).
+    const subByte = (n) => applySbox(sbox2, n, n, n, n);
+    // AES key sizes are 16/24/32 bytes, so len + 28 yields the 44/52/60
+    // schedule words from FIPS 197 §5.2 / Table 3.
+    const xk = new Uint32Array(len + 28); // expanded key
+    xk.set(k32);
+    // 4.3.1 Key expansion
+    for (let i = Nk; i < xk.length; i++) {
+        let t = xk[i - 1];
+        if (i % Nk === 0)
+            t = subByte(rotr32_8(t)) ^ xPowers[i / Nk - 1];
+        else if (Nk > 6 && i % Nk === 4)
+            t = subByte(t);
+        xk[i] = xk[i - Nk] ^ t;
+    }
+    clean(...toClean);
+    return xk;
+}
+function expandKeyDecLE(key) {
+    const encKey = expandKeyLE(key);
+    const xk = encKey.slice();
+    const Nk = encKey.length;
+    const { sbox2 } = tableEncoding;
+    const { T0, T1, T2, T3 } = tableDecoding;
+    // Local decrypt() walks round keys forward from xk[0], so reverse the
+    // encryption round-key blocks first before applying the equivalent-inverse
+    // middle-round transform.
+    for (let i = 0; i < Nk; i += 4) {
+        for (let j = 0; j < 4; j++)
+            xk[i + j] = encKey[Nk - i - 4 + j];
+    }
+    clean(encKey);
+    // Apply InvMixColumn to the reversed round keys using the same LE sbox2
+    // packing as the forward path.
+    // apply InvMixColumn except first & last round
+    for (let i = 4; i < Nk - 4; i++) {
+        const x = xk[i];
+        const w = applySbox(sbox2, x, x, x, x);
+        xk[i] = T0[w & 0xff] ^ T1[(w >>> 8) & 0xff] ^ T2[(w >>> 16) & 0xff] ^ T3[w >>> 24];
+    }
+    return xk;
+}
+// Apply tables
+function apply0123(T01, T23, s0, s1, s2, s3) {
+    // `T01` takes the low byte lane from `s0` plus the next lane from `s1`;
+    // `T23` does the same for `s2`/`s3`.
+    // Equivalent to `T0[s0&0xff] ^ T1[(s1>>>8)&0xff] ^ T2[(s2>>>16)&0xff] ^
+    // T3[s3>>>24]`, but with two merged-table fetches.
+    return (T01[((s0 << 8) & 0xff00) | ((s1 >>> 8) & 0xff)] ^
+        T23[((s2 >>> 8) & 0xff00) | ((s3 >>> 24) & 0xff)]);
+}
+function applySbox(sbox2, s0, s1, s2, s3) {
+    // `sbox2` packs two substituted byte lanes at a time in the same LE
+    // layout used by the round code.
+    // Equivalent to `SBOX(byte0(s0)) | SBOX(byte1(s1))<<8 |
+    // SBOX(byte2(s2))<<16 | SBOX(byte3(s3))<<24`.
+    return (sbox2[(s0 & 0xff) | (s1 & 0xff00)] |
+        (sbox2[((s2 >>> 16) & 0xff) | ((s3 >>> 16) & 0xff00)] << 16));
+}
+function encrypt(xk, s0, s1, s2, s3) {
+    const { sbox2, T01, T23 } = tableEncoding;
+    let k = 0;
+    ((s0 ^= xk[k++]), (s1 ^= xk[k++]), (s2 ^= xk[k++]), (s3 ^= xk[k++]));
+    // `xk` has Nr+1 round-key blocks, so after the initial AddRoundKey and the
+    // final S-box-only round there are Nr-1 full table/MixColumns rounds left.
+    const rounds = xk.length / 4 - 2;
+    for (let i = 0; i < rounds; i++) {
+        const t0 = xk[k++] ^ apply0123(T01, T23, s0, s1, s2, s3);
+        const t1 = xk[k++] ^ apply0123(T01, T23, s1, s2, s3, s0);
+        const t2 = xk[k++] ^ apply0123(T01, T23, s2, s3, s0, s1);
+        const t3 = xk[k++] ^ apply0123(T01, T23, s3, s0, s1, s2);
+        ((s0 = t0), (s1 = t1), (s2 = t2), (s3 = t3));
+    }
+    // last round (without mixcolumns, so using SBOX2 table)
+    const t0 = xk[k++] ^ applySbox(sbox2, s0, s1, s2, s3);
+    const t1 = xk[k++] ^ applySbox(sbox2, s1, s2, s3, s0);
+    const t2 = xk[k++] ^ applySbox(sbox2, s2, s3, s0, s1);
+    const t3 = xk[k++] ^ applySbox(sbox2, s3, s0, s1, s2);
+    return { s0: t0, s1: t1, s2: t2, s3: t3 };
+}
+// Can't be merged with encrypt: arg positions for apply0123 / applySbox are different
+function decrypt(xk, s0, s1, s2, s3) {
+    const { sbox2, T01, T23 } = tableDecoding;
+    let k = 0;
+    ((s0 ^= xk[k++]), (s1 ^= xk[k++]), (s2 ^= xk[k++]), (s3 ^= xk[k++]));
+    // With `expandKeyDecLE()` the round keys are already reversed and middle
+    // rounds are InvMixColumns-adjusted, so this loop follows the equivalent
+    // inverse cipher order directly.
+    const rounds = xk.length / 4 - 2;
+    for (let i = 0; i < rounds; i++) {
+        const t0 = xk[k++] ^ apply0123(T01, T23, s0, s3, s2, s1);
+        const t1 = xk[k++] ^ apply0123(T01, T23, s1, s0, s3, s2);
+        const t2 = xk[k++] ^ apply0123(T01, T23, s2, s1, s0, s3);
+        const t3 = xk[k++] ^ apply0123(T01, T23, s3, s2, s1, s0);
+        ((s0 = t0), (s1 = t1), (s2 = t2), (s3 = t3));
+    }
+    // Final equivalent-inverse round omits InvMixColumns, so use inverse
+    // S-box lanes in InvShiftRows order.
+    const t0 = xk[k++] ^ applySbox(sbox2, s0, s3, s2, s1);
+    const t1 = xk[k++] ^ applySbox(sbox2, s1, s0, s3, s2);
+    const t2 = xk[k++] ^ applySbox(sbox2, s2, s1, s0, s3);
+    const t3 = xk[k++] ^ applySbox(sbox2, s3, s2, s1, s0);
+    return { s0: t0, s1: t1, s2: t2, s3: t3 };
+}
+function ctrCounter(xk, nonce, src, dst) {
+    utils_abytes(nonce, aes_BLOCK_SIZE, 'nonce');
+    utils_abytes(src);
+    const srcLen = src.length;
+    dst = getOutput(srcLen, dst);
+    complexOverlapBytes(src, dst);
+    // Internal helper: mutate `nonce` in place as the live counter block so
+    // each encrypted block uses the next CTR value.
+    const ctr = nonce;
+    const c32 = u32(ctr);
+    const src32 = u32(src);
+    const dst32 = u32(dst);
+    // Fill block (empty, ctr=0)
+    let { s0, s1, s2, s3 } = encrypt(xk, swap8IfBE(c32[0]), swap8IfBE(c32[1]), swap8IfBE(c32[2]), swap8IfBE(c32[3]));
+    // process blocks
+    for (let i = 0; i + 4 <= src32.length; i += 4) {
+        dst32[i + 0] = src32[i + 0] ^ swap8IfBE(s0);
+        dst32[i + 1] = src32[i + 1] ^ swap8IfBE(s1);
+        dst32[i + 2] = src32[i + 2] ^ swap8IfBE(s2);
+        dst32[i + 3] = src32[i + 3] ^ swap8IfBE(s3);
+        incBytes(ctr, false, 1); // Full 128 bit counter with wrap around
+        ({ s0, s1, s2, s3 } = encrypt(xk, swap8IfBE(c32[0]), swap8IfBE(c32[1]), swap8IfBE(c32[2]), swap8IfBE(c32[3])));
+    }
+    // NIST SP 800-38A CTR mode uses the leading `u` bits of the next output
+    // block for the final short block.
+    // It's possible to handle > u32 fast, but is it worth it?
+    const start = aes_BLOCK_SIZE * Math.floor(src32.length / BLOCK_SIZE32);
+    if (start < srcLen) {
+        const b32 = new Uint32Array([s0, s1, s2, s3]);
+        swap32IfBE(b32);
+        const buf = u8(b32);
+        for (let i = start, pos = 0; i < srcLen; i++, pos++)
+            dst[i] = src[i] ^ buf[pos];
+        clean(b32);
+    }
+    // Unsafe mutable-counter API only advances whole blocks. Callers that want to
+    // resume after consuming part of this block must re-run from the same counter
+    // with left-padding and strip the already-consumed prefix themselves.
+    return dst;
+}
+// AES CTR with overflowing 32 bit counter
+// It's possible to do 32le significantly simpler (and probably faster) by using u32.
+// But, we need both, and perf bottleneck is in ghash anyway.
+// Unsafe 32-bit CTR helper: mutates `nonce` in place, expects aligned `src`/`dst`,
+// and uses `isLE` to choose which 32-bit counter word is incremented.
+function ctr32(xk, isLE, nonce, src, dst) {
+    utils_abytes(nonce, aes_BLOCK_SIZE, 'nonce');
+    utils_abytes(src);
+    dst = getOutput(src.length, dst);
+    const ctr = nonce; // write new value to nonce, so it can be re-used
+    const c32 = u32(ctr);
+    const view = createView(ctr);
+    const src32 = u32(src);
+    const dst32 = u32(dst);
+    // NIST SP 800-38D GCTR increments the rightmost 32 bits of J0, while
+    // RFC 8452 AES-GCM-SIV increments the first 32 bits as a little-endian u32.
+    const ctrPos = isLE ? 0 : 12;
+    const srcLen = src.length;
+    // Fill block (empty, ctr=0)
+    let ctrNum = view.getUint32(ctrPos, isLE); // read current counter value
+    let { s0, s1, s2, s3 } = encrypt(xk, swap8IfBE(c32[0]), swap8IfBE(c32[1]), swap8IfBE(c32[2]), swap8IfBE(c32[3]));
+    // process blocks
+    for (let i = 0; i + 4 <= src32.length; i += 4) {
+        dst32[i + 0] = src32[i + 0] ^ swap8IfBE(s0);
+        dst32[i + 1] = src32[i + 1] ^ swap8IfBE(s1);
+        dst32[i + 2] = src32[i + 2] ^ swap8IfBE(s2);
+        dst32[i + 3] = src32[i + 3] ^ swap8IfBE(s3);
+        ctrNum = (ctrNum + 1) >>> 0; // u32 wrap
+        view.setUint32(ctrPos, ctrNum, isLE);
+        ({ s0, s1, s2, s3 } = encrypt(xk, swap8IfBE(c32[0]), swap8IfBE(c32[1]), swap8IfBE(c32[2]), swap8IfBE(c32[3])));
+    }
+    // leftovers (less than a block)
+    const start = aes_BLOCK_SIZE * Math.floor(src32.length / BLOCK_SIZE32);
+    if (start < srcLen) {
+        const b32 = new Uint32Array([s0, s1, s2, s3]);
+        swap32IfBE(b32);
+        const buf = u8(b32);
+        for (let i = start, pos = 0; i < srcLen; i++, pos++)
+            dst[i] = src[i] ^ buf[pos];
+        clean(b32);
+    }
+    // Same unsafe contract as ctrCounter(): only full blocks advance the stored
+    // mutable counter state; partial-block continuation is caller-managed.
+    return dst;
+}
+/**
+ * **CTR** (Counter Mode): turns a block cipher into a stream cipher using a
+ * full 16-byte counter block.
+ * Efficient and parallelizable. Requires a unique nonce per encryption. Unauthenticated: needs MAC.
+ * @param key - AES key bytes.
+ * @param nonce - 16-byte counter block, incremented as a full AES block.
+ * @returns Cipher instance with `encrypt()` and `decrypt()`.
+ * @example
+ * Encrypts a short payload with a fresh AES key and counter block.
+ *
+ * ```ts
+ * import { ctr } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const nonce = randomBytes(16);
+ * const cipher = ctr(key, nonce);
+ * cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const ctr = /* @__PURE__ */ wrapCipher({ blockSize: 16, nonceLength: 16 }, function aesctr(key, nonce) {
+    function processCtr(buf, dst) {
+        utils_abytes(buf);
+        if (dst !== undefined) {
+            utils_abytes(dst);
+            // Optional output buffers must stay 4-byte aligned because
+            // ctrCounter() reinterprets them as Uint32Array words.
+            if (!isAligned32(dst))
+                throw new Error('unaligned destination');
+        }
+        const xk = expandKeyLE(key);
+        // Public CTR keeps caller nonce bytes immutable even though ctrCounter()
+        // advances the live 16-byte counter block in place.
+        const n = utils_copyBytes(nonce); // align + avoid changing
+        const toClean = [xk, n];
+        if (!isAligned32(buf))
+            toClean.push((buf = utils_copyBytes(buf)));
+        const out = ctrCounter(xk, n, buf, dst);
+        clean(...toClean);
+        return out;
+    }
+    return {
+        encrypt: (plaintext, dst) => processCtr(plaintext, dst),
+        decrypt: (ciphertext, dst) => processCtr(ciphertext, dst),
+    };
+});
+function validateBlockDecrypt(data) {
+    utils_abytes(data);
+    // ECB/CBC decryption always consumes whole ciphertext blocks; PKCS#7/CMS
+    // padding, when enabled, is removed only after decrypting the final block.
+    if (data.length % aes_BLOCK_SIZE !== 0) {
+        throw new Error('aes-(cbc/ecb).decrypt ciphertext should consist of blocks with size ' + aes_BLOCK_SIZE);
+    }
+}
+// ECB/CBC core modes operate on whole blocks; `pkcs5` enables the library's
+// PKCS#7/CMS-compatible final-block padding convenience before encryption.
+function validateBlockEncrypt(plaintext, pkcs5, dst) {
+    utils_abytes(plaintext);
+    let outLen = plaintext.length;
+    const remaining = outLen % aes_BLOCK_SIZE;
+    if (!pkcs5 && remaining !== 0)
+        throw new Error('aec/(cbc-ecb): unpadded plaintext with disabled padding');
+    if (pkcs5) {
+        let left = aes_BLOCK_SIZE - remaining;
+        // RFC 5652 pads even already-aligned inputs, so a full extra block is
+        // appended when the plaintext length is already a multiple of 16 bytes.
+        if (!left)
+            left = aes_BLOCK_SIZE; // if no bytes left, create empty padding block
+        outLen = outLen + left;
+    }
+    dst = getOutput(outLen, dst);
+    complexOverlapBytes(plaintext, dst);
+    // Copy on BE or misaligned inputs so u32()/swap32IfBE() normalization never
+    // mutates caller plaintext bytes in place before ECB/CBC processing.
+    if (!isLE || !isAligned32(plaintext))
+        plaintext = utils_copyBytes(plaintext);
+    const b = u32(plaintext);
+    swap32IfBE(b);
+    const o = u32(dst);
+    return { b, o, out: dst };
+}
+// `pkcs5` is the historical option name; for AES's 16-byte block this is the
+// generic PKCS#7/CMS-style block-padding rule on decrypt.
+function validatePKCS(data, pkcs5) {
+    if (!pkcs5)
+        return data;
+    const len = data.length;
+    // RFC 5652 pads even empty / already-aligned inputs, so a valid padded
+    // ECB/CBC ciphertext is never empty when PKCS#7/CMS unpadding is enabled.
+    // AES-CBC/ECB ciphertext should be full blocks before unpadding
+    if (len === 0)
+        throw new Error('aes/pkcs7: empty ciphertext not allowed');
+    const lastByte = data[len - 1];
+    let valid = 1;
+    valid &= ((lastByte - 1) >>> 31) ^ 1; // pad >= 1
+    valid &= ((16 - lastByte) >>> 31) ^ 1; // pad <= 16
+    // Check exactly 16 tail bytes in constant-shape loop
+    // For i < pad: byte must equal pad
+    // For i >= pad: ignore byte
+    for (let i = 0; i < 16; i++) {
+        // const b = data[len - 1 - i];
+        const shouldCheck = (i - lastByte) >>> 31; // 1 if i < pad else 0
+        const eq = (data[len - 1 - i] ^ lastByte) === 0 ? 1 : 0; // 1 if equal
+        valid &= eq | (shouldCheck ^ 1); // pass if equal OR not checked
+    }
+    // if (invalidLen) throw new Error('aes/pkcs7: ciphertext length must be multiple of 16');
+    if (!valid)
+        throw new Error('aes/pkcs7: wrong padding');
+    return data.subarray(0, len - lastByte);
+}
+// ECB/CBC callers only pass the final short block here, so `left.length` is
+// 0..15 and the helper always emits exactly one padded 16-byte block.
+function padPCKS(left) {
+    const tmp = new Uint8Array(16);
+    const tmp32 = u32(tmp);
+    tmp.set(left);
+    const paddingByte = aes_BLOCK_SIZE - left.length;
+    // RFC 5652 §6.3 fills the whole suffix with the padding length byte:
+    // e.g. `aa 0f..0f` for a 1-byte tail, or `10..10` for a full extra block.
+    for (let i = aes_BLOCK_SIZE - paddingByte; i < aes_BLOCK_SIZE; i++)
+        tmp[i] = paddingByte;
+    return tmp32;
+}
+/**
+ * **ECB** (Electronic Codebook): Deterministic encryption; identical plaintext blocks yield
+ * identical ciphertexts. Not secure due to pattern leakage.
+ * See {@link https://words.filippo.io/the-ecb-penguin/ | the AES Penguin}.
+ * @param key - AES key bytes.
+ * @param opts - Padding options. See {@link BlockOpts}.
+ * @returns Cipher instance with `encrypt()` and `decrypt()`.
+ * @example
+ * Shows the basic ECB encrypt call shape with a fresh key; avoid ECB in new designs.
+ *
+ * ```ts
+ * import { ecb } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const cipher = ecb(key);
+ * cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const ecb = /* @__PURE__ */ wrapCipher({ blockSize: 16 }, function aesecb(key, opts = {}) {
+    const pkcs5 = !opts.disablePadding;
+    return {
+        encrypt(plaintext, dst) {
+            const { b, o, out: _out } = validateBlockEncrypt(plaintext, pkcs5, dst);
+            const xk = expandKeyLE(key);
+            let i = 0;
+            for (; i + 4 <= b.length;) {
+                const { s0, s1, s2, s3 } = encrypt(xk, b[i + 0], b[i + 1], b[i + 2], b[i + 3]);
+                ((o[i++] = s0), (o[i++] = s1), (o[i++] = s2), (o[i++] = s3));
+            }
+            if (pkcs5) {
+                const tmp32 = padPCKS(plaintext.subarray(i * 4));
+                swap32IfBE(tmp32);
+                const { s0, s1, s2, s3 } = encrypt(xk, tmp32[0], tmp32[1], tmp32[2], tmp32[3]);
+                ((o[i++] = s0), (o[i++] = s1), (o[i++] = s2), (o[i++] = s3));
+            }
+            swap32IfBE(o);
+            clean(xk);
+            return _out;
+        },
+        decrypt(ciphertext, dst) {
+            validateBlockDecrypt(ciphertext);
+            const xk = expandKeyDecLE(key);
+            dst = getOutput(ciphertext.length, dst);
+            const toClean = [xk];
+            complexOverlapBytes(ciphertext, dst);
+            // Copy on BE or misaligned ciphertext so u32()/swap32IfBE()
+            // normalization never mutates caller bytes in place before decrypt().
+            if (!isLE || !isAligned32(ciphertext))
+                toClean.push((ciphertext = utils_copyBytes(ciphertext)));
+            const b = u32(ciphertext);
+            const o = u32(dst);
+            swap32IfBE(b);
+            for (let i = 0; i + 4 <= b.length;) {
+                const { s0, s1, s2, s3 } = decrypt(xk, b[i + 0], b[i + 1], b[i + 2], b[i + 3]);
+                ((o[i++] = s0), (o[i++] = s1), (o[i++] = s2), (o[i++] = s3));
+            }
+            swap32IfBE(o);
+            clean(...toClean);
+            return validatePKCS(dst, pkcs5);
+        },
+    };
+});
+/**
+ * **CBC** (Cipher Block Chaining): Each plaintext block is XORed with the
+ * previous block of ciphertext before encryption.
+ * Hard to use: requires proper padding and an unpredictable IV. Unauthenticated: needs MAC.
+ * @param key - AES key bytes.
+ * @param iv - 16-byte unpredictable initialization vector.
+ * @param opts - Padding options. See {@link BlockOpts}.
+ * @returns Cipher instance with `encrypt()` and `decrypt()`.
+ * @example
+ * Encrypts a padded message with a fresh key and 16-byte IV.
+ *
+ * ```ts
+ * import { cbc } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const iv = randomBytes(16);
+ * const cipher = cbc(key, iv);
+ * cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const cbc = /* @__PURE__ */ wrapCipher({ blockSize: 16, nonceLength: 16 }, function aescbc(key, iv, opts = {}) {
+    const pkcs5 = !opts.disablePadding;
+    return {
+        encrypt(plaintext, dst) {
+            const xk = expandKeyLE(key);
+            const { b, o, out: _out } = validateBlockEncrypt(plaintext, pkcs5, dst);
+            let _iv = iv;
+            const toClean = [xk];
+            // Copy on BE or misaligned inputs so IV normalization and the mutable
+            // local chaining state never write back into caller IV bytes.
+            if (!isLE || !isAligned32(_iv))
+                toClean.push((_iv = utils_copyBytes(_iv)));
+            const n32 = u32(_iv);
+            swap32IfBE(n32);
+            // prettier-ignore
+            let s0 = n32[0], s1 = n32[1], s2 = n32[2], s3 = n32[3];
+            let i = 0;
+            for (; i + 4 <= b.length;) {
+                ((s0 ^= b[i + 0]), (s1 ^= b[i + 1]), (s2 ^= b[i + 2]), (s3 ^= b[i + 3]));
+                ({ s0, s1, s2, s3 } = encrypt(xk, s0, s1, s2, s3));
+                ((o[i++] = s0), (o[i++] = s1), (o[i++] = s2), (o[i++] = s3));
+            }
+            if (pkcs5) {
+                const tmp32 = padPCKS(plaintext.subarray(i * 4));
+                swap32IfBE(tmp32);
+                ((s0 ^= tmp32[0]), (s1 ^= tmp32[1]), (s2 ^= tmp32[2]), (s3 ^= tmp32[3]));
+                ({ s0, s1, s2, s3 } = encrypt(xk, s0, s1, s2, s3));
+                ((o[i++] = s0), (o[i++] = s1), (o[i++] = s2), (o[i++] = s3));
+            }
+            swap32IfBE(o);
+            clean(...toClean);
+            return _out;
+        },
+        decrypt(ciphertext, dst) {
+            validateBlockDecrypt(ciphertext);
+            const xk = expandKeyDecLE(key);
+            let _iv = iv;
+            const toClean = [xk];
+            // Copy on BE or misaligned inputs so IV normalization and the mutable
+            // local chaining state never write back into caller IV bytes.
+            if (!isLE || !isAligned32(_iv))
+                toClean.push((_iv = utils_copyBytes(_iv)));
+            const n32 = u32(_iv);
+            swap32IfBE(n32);
+            dst = getOutput(ciphertext.length, dst);
+            complexOverlapBytes(ciphertext, dst);
+            // Copy on BE or misaligned ciphertext so u32()/swap32IfBE()
+            // normalization never mutates caller bytes in place before decrypt().
+            if (!isLE || !isAligned32(ciphertext))
+                toClean.push((ciphertext = utils_copyBytes(ciphertext)));
+            const b = u32(ciphertext);
+            const o = u32(dst);
+            swap32IfBE(b);
+            // prettier-ignore
+            let s0 = n32[0], s1 = n32[1], s2 = n32[2], s3 = n32[3];
+            for (let i = 0; i + 4 <= b.length;) {
+                // prettier-ignore
+                const ps0 = s0, ps1 = s1, ps2 = s2, ps3 = s3;
+                ((s0 = b[i + 0]), (s1 = b[i + 1]), (s2 = b[i + 2]), (s3 = b[i + 3]));
+                const { s0: o0, s1: o1, s2: o2, s3: o3 } = decrypt(xk, s0, s1, s2, s3);
+                ((o[i++] = o0 ^ ps0), (o[i++] = o1 ^ ps1), (o[i++] = o2 ^ ps2), (o[i++] = o3 ^ ps3));
+            }
+            swap32IfBE(o);
+            clean(...toClean);
+            return validatePKCS(dst, pkcs5);
+        },
+    };
+});
+/**
+ * CFB (CFB-128): Cipher Feedback Mode with 128-bit segments. The input for the
+ * block cipher is the previous cipher output.
+ * Unauthenticated: needs MAC.
+ * @param key - AES key bytes.
+ * @param iv - 16-byte unpredictable initialization vector.
+ * @returns Cipher instance with `encrypt()` and `decrypt()`.
+ * @example
+ * Encrypts a short message with feedback mode and a fresh key/IV pair.
+ *
+ * ```ts
+ * import { cfb } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const iv = randomBytes(16);
+ * const cipher = cfb(key, iv);
+ * cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const cfb = /* @__PURE__ */ wrapCipher({ blockSize: 16, nonceLength: 16 }, function aescfb(key, iv) {
+    function processCfb(src, isEncrypt, dst) {
+        utils_abytes(src);
+        const srcLen = src.length;
+        dst = getOutput(srcLen, dst);
+        // CFB feeds back previous ciphertext, so overlapping src/dst could
+        // overwrite bytes that are still needed as the next feedback block.
+        if (overlapBytes(src, dst))
+            throw new Error('overlapping src and dst not supported.');
+        const xk = expandKeyLE(key);
+        let _iv = iv;
+        const toClean = [xk];
+        // Copy on BE or misaligned inputs so u32()/swap32IfBE() normalization
+        // never mutates caller IV/src bytes in place before CFB processing.
+        if (!isLE || !isAligned32(_iv))
+            toClean.push((_iv = utils_copyBytes(_iv)));
+        if (!isLE || !isAligned32(src))
+            toClean.push((src = utils_copyBytes(src)));
+        const src32 = u32(src);
+        const dst32 = u32(dst);
+        // NIST SP 800-38A §6.3 feeds back the previous ciphertext segment in
+        // both directions: encrypt reuses freshly written dst words, decrypt
+        // reuses the source ciphertext words.
+        const next32 = isEncrypt ? dst32 : src32;
+        const n32 = u32(_iv);
+        swap32IfBE(src32);
+        swap32IfBE(n32);
+        // prettier-ignore
+        let s0 = n32[0], s1 = n32[1], s2 = n32[2], s3 = n32[3];
+        for (let i = 0; i + 4 <= src32.length;) {
+            const { s0: e0, s1: e1, s2: e2, s3: e3 } = encrypt(xk, s0, s1, s2, s3);
+            dst32[i + 0] = src32[i + 0] ^ e0;
+            dst32[i + 1] = src32[i + 1] ^ e1;
+            dst32[i + 2] = src32[i + 2] ^ e2;
+            dst32[i + 3] = src32[i + 3] ^ e3;
+            ((s0 = next32[i++]), (s1 = next32[i++]), (s2 = next32[i++]), (s3 = next32[i++]));
+        }
+        // leftovers (less than block)
+        const start = aes_BLOCK_SIZE * Math.floor(src32.length / BLOCK_SIZE32);
+        if (start < srcLen) {
+            // Byte-oriented API: for a final short tail, reuse the next CFB-128
+            // output block and XOR only the needed prefix. RFC 3826 §3.1.3 /
+            // §3.1.4 describes the same no-padding rule at bit granularity for a
+            // final r<=128 segment.
+            ({ s0, s1, s2, s3 } = encrypt(xk, s0, s1, s2, s3));
+            const tmp = new Uint32Array([s0, s1, s2, s3]);
+            swap32IfBE(tmp);
+            const buf = u8(tmp);
+            for (let i = start, pos = 0; i < srcLen; i++, pos++)
+                dst[i] = src[i] ^ buf[pos];
+            clean(buf);
+        }
+        swap32IfBE(dst32);
+        clean(...toClean);
+        return dst;
+    }
+    return {
+        encrypt: (plaintext, dst) => processCfb(plaintext, true, dst),
+        decrypt: (ciphertext, dst) => processCfb(ciphertext, false, dst),
+    };
+});
+// TODO: merge with chacha, however gcm has bitLen while chacha has byteLen
+// `data` is the payload covered by the polynomial MAC: ciphertext for GCM,
+// plaintext for GCM-SIV. Keep AAD/data/length as separate updates because
+// GHASH/POLYVAL pad each call to block boundaries, so the chunks must match the
+// spec-defined segments instead of arbitrary concatenation boundaries.
+function computeTag(fn, isLE, key, data, AAD) {
+    const aadLength = AAD ? AAD.length : 0;
+    const h = fn.create(key, data.length + aadLength);
+    if (AAD)
+        h.update(AAD);
+    // u64Lengths() takes (dataBits, aadBits) but still serializes the final
+    // block as len(AAD) || len(data), matching both GCM and GCM-SIV.
+    const num = u64Lengths(8 * data.length, 8 * aadLength, isLE);
+    h.update(data);
+    h.update(num);
+    const res = h.digest();
+    clean(num);
+    return res;
+}
+/**
+ * **GCM** (Galois/Counter Mode): Combines CTR mode with polynomial MAC. Efficient and widely used.
+ * Not perfect:
+ * a) conservative key wear-out is `2**32` (4B) msgs.
+ * b) key wear-out under random nonces is even smaller: `2**23` (8M) messages for `2**-50` chance.
+ * c) MAC can be forged: see Poly1305 documentation.
+ * @param key - AES key bytes.
+ * @param nonce - Nonce bytes (12 recommended, minimum 8; other lengths use GHASH J0 derivation).
+ * @param AAD - Additional authenticated data.
+ * @returns AEAD cipher instance with a fixed 16-byte tag.
+ * @example
+ * Encrypts and authenticates plaintext with a fresh key and 12-byte nonce.
+ *
+ * ```ts
+ * import { gcm } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const nonce = randomBytes(12);
+ * const cipher = gcm(key, nonce);
+ * cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const aes_gcm = /* @__PURE__ */ wrapCipher({ blockSize: 16, nonceLength: 12, tagLength: 16, varSizeNonce: true }, function aesgcm(key, nonce, AAD) {
+    // SP 800-38D lets implementations narrow supported IV lengths.
+    // This wrapper intentionally requires at least 8 bytes; OpenSSL accepts shorter IVs too.
+    // 12-byte nonces take the fast path; other allowed lengths use GHASH to derive J0.
+    if (nonce.length < 8)
+        throw new Error('aes/gcm: invalid nonce length');
+    const tagLength = 16;
+    function _computeTag(authKey, tagMask, data) {
+        const tag = computeTag(ghash, false, authKey, data, AAD);
+        for (let i = 0; i < tagMask.length; i++)
+            tag[i] ^= tagMask[i];
+        return tag;
+    }
+    function deriveKeys() {
+        const xk = expandKeyLE(key);
+        const authKey = EMPTY_BLOCK.slice();
+        const counter = EMPTY_BLOCK.slice();
+        ctr32(xk, false, counter, counter, authKey);
+        // NIST 800-38d, page 15: different behavior for 96-bit and non-96-bit nonces
+        if (nonce.length === 12) {
+            counter.set(nonce);
+        }
+        else {
+            const nonceLen = EMPTY_BLOCK.slice();
+            const view = createView(nonceLen);
+            view.setBigUint64(8, BigInt(nonce.length * 8), false);
+            // GHASH.update() pads each call to 16 bytes, so
+            // update(nonce).update(nonceLen) realizes
+            // IV || 0^s || 0^64 || [len(IV)]_64 for non-96-bit nonces.
+            // ghash(nonce || u64be(0) || u64be(nonceLen*8))
+            const g = ghash.create(authKey).update(nonce).update(nonceLen);
+            g.digestInto(counter); // digestInto doesn't trigger '.destroy'
+            g.destroy();
+        }
+        // GCTR_K(J0, 0^128) = E_K(J0); reusing ctr32() here extracts that tag
+        // mask and leaves `counter` advanced to inc32(J0) for payload GCTR.
+        const tagMask = ctr32(xk, false, counter, EMPTY_BLOCK);
+        return { xk, authKey, counter, tagMask };
+    }
+    return {
+        encrypt(plaintext) {
+            const { xk, authKey, counter, tagMask } = deriveKeys();
+            const out = new Uint8Array(plaintext.length + tagLength);
+            const toClean = [xk, authKey, counter, tagMask];
+            if (!isAligned32(plaintext))
+                toClean.push((plaintext = utils_copyBytes(plaintext)));
+            ctr32(xk, false, counter, plaintext, out.subarray(0, plaintext.length));
+            const tag = _computeTag(authKey, tagMask, out.subarray(0, out.length - tagLength));
+            toClean.push(tag);
+            out.set(tag, plaintext.length);
+            clean(...toClean);
+            return out;
+        },
+        decrypt(ciphertext) {
+            const { xk, authKey, counter, tagMask } = deriveKeys();
+            const toClean = [xk, authKey, tagMask, counter];
+            if (!isAligned32(ciphertext))
+                toClean.push((ciphertext = utils_copyBytes(ciphertext)));
+            const data = ciphertext.subarray(0, -tagLength);
+            const passedTag = ciphertext.subarray(-tagLength);
+            const tag = _computeTag(authKey, tagMask, data);
+            toClean.push(tag);
+            // NIST SP 800-38D §7.2 permits equivalent step orderings; verify the
+            // tag before CTR so unauthenticated plaintext is never materialized.
+            if (!equalBytes(tag, passedTag)) {
+                clean(...toClean);
+                throw new Error('aes/gcm: invalid ghash tag');
+            }
+            const out = ctr32(xk, false, counter, data);
+            clean(...toClean);
+            return out;
+        },
+    };
+});
+const limit = (name, min, max) => (value) => {
+    // Current AES-SIV/GCM-SIV callers pass protocol limits from RFC 8452 / RFC 5297,
+    // not arbitrary library-preference bounds.
+    // Callers feed Uint8Array.length values here, so safe-integer rejection
+    // does not exclude any representable input even when an RFC bound is larger.
+    if (!Number.isSafeInteger(value) || min > value || value > max) {
+        const minmax = '[' + min + '..' + max + ']';
+        throw new Error('' + name + ': expected value in range ' + minmax + ', got ' + value);
+    }
+};
+/**
+ * **SIV** (Synthetic IV): GCM with nonce-misuse resistance.
+ * Repeating nonces reveal only the fact plaintexts are identical.
+ * Also suffers from GCM issues: key wear-out limits & MAC forging.
+ * See {@link https://www.rfc-editor.org/rfc/rfc8452 | RFC 8452}.
+ * RFC 8452 defines 16-byte and 32-byte AES keys for this mode.
+ * This implementation also accepts 24-byte AES-192 keys as a local
+ * extension; see the inline comment next to `validateKeyLength(key)` below
+ * for the exact scope note.
+ * @param key - AES key bytes.
+ * @param nonce - 12-byte nonce.
+ * @param AAD - Additional authenticated data.
+ * @returns AEAD cipher instance.
+ * @example
+ * Encrypts and authenticates plaintext with a fresh key and nonce, while tolerating reuse.
+ *
+ * ```ts
+ * import { gcmsiv } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const nonce = randomBytes(12);
+ * const cipher = gcmsiv(key, nonce);
+ * cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const gcmsiv = /* @__PURE__ */ wrapCipher({ blockSize: 16, nonceLength: 12, tagLength: 16, varSizeNonce: true }, function aessiv(key, nonce, AAD) {
+    const tagLength = 16;
+    // From RFC 8452: Section 6
+    const AAD_LIMIT = limit('AAD', 0, 2 ** 36);
+    const PLAIN_LIMIT = limit('plaintext', 0, 2 ** 36);
+    const NONCE_LIMIT = limit('nonce', 12, 12);
+    const CIPHER_LIMIT = limit('ciphertext', 16, 2 ** 36 + 16);
+    utils_abytes(key);
+    // RFC 8452 only standardizes 16-byte and 32-byte key-generating keys.
+    // The accepted 24-byte path is a local AES-192 extension outside the RFC-defined AEADs.
+    validateKeyLength(key);
+    NONCE_LIMIT(nonce.length);
+    if (AAD !== undefined)
+        AAD_LIMIT(AAD.length);
+    function deriveKeys() {
+        const xk = expandKeyLE(key);
+        const encKey = new Uint8Array(key.length);
+        const authKey = new Uint8Array(16);
+        const toClean = [xk, encKey];
+        let _nonce = nonce;
+        // Copy on BE or misaligned nonce so u32()/swap32IfBE() normalization
+        // never mutates caller nonce bytes before RFC 8452 key derivation.
+        if (!isLE || !isAligned32(_nonce))
+            toClean.push((_nonce = utils_copyBytes(_nonce)));
+        const n32 = u32(_nonce);
+        swap32IfBE(n32);
+        // prettier-ignore
+        let s0 = 0, s1 = n32[0], s2 = n32[1], s3 = n32[2];
+        let counter = 0;
+        for (const derivedKey of [authKey, encKey].map(u32)) {
+            const d32 = u32(derivedKey);
+            for (let i = 0; i < d32.length; i += 2) {
+                // aes(u32le(0) || nonce)[:8] || aes(u32le(1) || nonce)[:8] ...
+                const { s0: o0, s1: o1 } = encrypt(xk, s0, s1, s2, s3);
+                d32[i + 0] = o0;
+                d32[i + 1] = o1;
+                s0 = ++counter; // increment counter inside state
+            }
+            swap32IfBE(d32);
+        }
+        const res = { authKey, encKey: expandKeyLE(encKey) };
+        // Cleanup
+        clean(...toClean);
+        return res;
+    }
+    function _computeTag(encKey, authKey, data) {
+        const tag = computeTag(polyval, true, authKey, data, AAD);
+        // Compute the expected tag by XORing S_s and the nonce, clearing the
+        // most significant bit of the last byte and encrypting with the
+        // message-encryption key.
+        for (let i = 0; i < 12; i++)
+            tag[i] ^= nonce[i];
+        tag[15] &= 0x7f; // Clear the highest bit
+        // encrypt tag as block
+        const t32 = u32(tag);
+        swap32IfBE(t32);
+        // prettier-ignore
+        let s0 = t32[0], s1 = t32[1], s2 = t32[2], s3 = t32[3];
+        ({ s0, s1, s2, s3 } = encrypt(encKey, s0, s1, s2, s3));
+        ((t32[0] = s0), (t32[1] = s1), (t32[2] = s2), (t32[3] = s3));
+        swap32IfBE(t32);
+        return tag;
+    }
+    // actual decrypt/encrypt of message.
+    function processSiv(encKey, tag, input) {
+        let block = utils_copyBytes(tag);
+        // RFC 8452 §4 / §5 use the tag with the highest bit of the last byte
+        // forced to one as the initial AES-CTR counter block.
+        block[15] |= 0x80; // Force highest bit
+        const res = ctr32(encKey, true, block, input);
+        // Cleanup
+        clean(block);
+        return res;
+    }
+    return {
+        encrypt(plaintext) {
+            PLAIN_LIMIT(plaintext.length);
+            const { encKey, authKey } = deriveKeys();
+            const tag = _computeTag(encKey, authKey, plaintext);
+            const toClean = [encKey, authKey, tag];
+            if (!isAligned32(plaintext))
+                toClean.push((plaintext = utils_copyBytes(plaintext)));
+            const out = new Uint8Array(plaintext.length + tagLength);
+            out.set(tag, plaintext.length);
+            out.set(processSiv(encKey, tag, plaintext));
+            // Cleanup
+            clean(...toClean);
+            return out;
+        },
+        decrypt(ciphertext) {
+            CIPHER_LIMIT(ciphertext.length);
+            const tag = ciphertext.subarray(-tagLength);
+            const { encKey, authKey } = deriveKeys();
+            const toClean = [encKey, authKey];
+            if (!isAligned32(ciphertext))
+                toClean.push((ciphertext = utils_copyBytes(ciphertext)));
+            const plaintext = processSiv(encKey, tag, ciphertext.subarray(0, -tagLength));
+            const expectedTag = _computeTag(encKey, authKey, plaintext);
+            toClean.push(expectedTag);
+            // RFC 8452 §5: plaintext is unauthenticated here and MUST NOT be
+            // returned until the expected-tag check completes successfully.
+            if (!equalBytes(tag, expectedTag)) {
+                clean(...toClean);
+                throw new Error('invalid polyval tag');
+            }
+            // Cleanup
+            clean(...toClean);
+            return plaintext;
+        },
+    };
+});
+function isBytes32(a) {
+    // Plain `instanceof Uint32Array` is too strict for cross-realm expanded-key views.
+    // This is only a best-effort unsafe-export guard, not a provenance proof for `expandKeyLE`.
+    return (a instanceof Uint32Array || (ArrayBuffer.isView(a) && a.constructor.name === 'Uint32Array'));
+}
+// Unsafe single-block helpers: mutate `block` in place and require its 16-byte
+// Uint8Array view to be 4-byte aligned because `u32(block)` reinterprets it.
+function encryptBlock(xk, block) {
+    utils_abytes(block, 16, 'block');
+    if (!isBytes32(xk))
+        throw new Error('_encryptBlock accepts result of expandKeyLE');
+    const b32 = u32(block);
+    swap32IfBE(b32);
+    let { s0, s1, s2, s3 } = encrypt(xk, b32[0], b32[1], b32[2], b32[3]);
+    ((b32[0] = s0), (b32[1] = s1), (b32[2] = s2), (b32[3] = s3));
+    swap32IfBE(b32);
+    return block;
+}
+function decryptBlock(xk, block) {
+    utils_abytes(block, 16, 'block');
+    if (!isBytes32(xk))
+        throw new Error('_decryptBlock accepts result of expandKeyLE');
+    const b32 = u32(block);
+    swap32IfBE(b32);
+    let { s0, s1, s2, s3 } = decrypt(xk, b32[0], b32[1], b32[2], b32[3]);
+    ((b32[0] = s0), (b32[1] = s1), (b32[2] = s2), (b32[3] = s3));
+    swap32IfBE(b32);
+    return block;
+}
+/**
+ * AES-W (base for AESKW/AESKWP).
+ * Specs:
+ * {@link https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-38F.pdf | SP800-38F},
+ * {@link https://www.rfc-editor.org/rfc/rfc3394 | RFC 3394},
+ * {@link https://www.rfc-editor.org/rfc/rfc5649 | RFC 5649}.
+ * Shared core mutates `out` in place; callers are responsible for prepending
+ * the right IV/AIV and checking the recovered value after decrypt.
+ */
+const AESW = {
+    /*
+    High-level pseudocode:
+    ```
+    A: u64 = IV
+    out = []
+    for (let i=0, ctr = 0; i<6; i++) {
+      for (const chunk of chunks(plaintext, 8)) {
+        A ^= swapEndianess(ctr++)
+        [A, res] = chunks(encrypt(A || chunk), 8);
+        out ||= res
+      }
+    }
+    out = A || out
+    ```
+    Decrypt is the same, but reversed.
+    */
+    encrypt(kek, out) {
+        // Current implementation keeps RFC 3394/5649 `t` in a u32-shaped counter,
+        // so the shared core caps plaintext below 4 GiB even though the specs allow more.
+        if (out.length >= 2 ** 32)
+            throw new Error('plaintext should be less than 4gb');
+        const xk = expandKeyLE(kek);
+        // 16-byte `S = A || P[1]` is the RFC 5649 KWP special case for n=1;
+        // KW callers never reach it because KW requires at least two plaintext semiblocks.
+        if (out.length === 16)
+            encryptBlock(xk, out);
+        else {
+            const o32 = u32(out);
+            swap32IfBE(o32);
+            // prettier-ignore
+            let a0 = o32[0], a1 = o32[1]; // A
+            for (let j = 0, ctr = 1; j < 6; j++) {
+                for (let pos = 2; pos < o32.length; pos += 2, ctr++) {
+                    const { s0, s1, s2, s3 } = encrypt(xk, a0, a1, o32[pos], o32[pos + 1]);
+                    // A = MSB(64, B) ^ t where t = (n*j)+i. Under the 32-bit length cap
+                    // above, `t` fits in the low half of `[t]_64`, so xor only the low
+                    // 32 bits of A after converting `ctr` to network order.
+                    ((a0 = s0), (a1 = s1 ^ byteSwap(ctr)), (o32[pos] = s2), (o32[pos + 1] = s3));
+                }
+            }
+            ((o32[0] = a0), (o32[1] = a1)); // out = A || out
+            swap32IfBE(o32);
+        }
+        xk.fill(0);
+    },
+    decrypt(kek, out) {
+        // Same implementation cap on the recovered plaintext length after
+        // removing the 8-byte A/IV prefix.
+        if (out.length - 8 >= 2 ** 32)
+            throw new Error('ciphertext should be less than 4gb');
+        const xk = expandKeyDecLE(kek);
+        const chunks = out.length / 8 - 1; // first chunk is IV
+        // `n = 2` semiblocks is the RFC 5649 KWP special case; KW ciphertexts
+        // always have at least three semiblocks and therefore use the W^-1 loop.
+        if (chunks === 1)
+            decryptBlock(xk, out);
+        else {
+            const o32 = u32(out);
+            swap32IfBE(o32);
+            // prettier-ignore
+            let a0 = o32[0], a1 = o32[1]; // A
+            for (let j = 0, ctr = chunks * 6; j < 6; j++) {
+                for (let pos = chunks * 2; pos >= 1; pos -= 2, ctr--) {
+                    a1 ^= byteSwap(ctr);
+                    const { s0, s1, s2, s3 } = decrypt(xk, a0, a1, o32[pos], o32[pos + 1]);
+                    ((a0 = s0), (a1 = s1), (o32[pos] = s2), (o32[pos + 1] = s3));
+                }
+            }
+            ((o32[0] = a0), (o32[1] = a1));
+            swap32IfBE(o32);
+        }
+        xk.fill(0);
+    },
+};
+// RFC 3394 §2.2.3.1 / NIST SP 800-38F Algorithm 3 / Algorithm 4: KW prepends
+// the default 64-bit ICV1 and unwrap must verify the same value.
+const AESKW_IV = /* @__PURE__ */ new Uint8Array(8).fill(0xa6); // A6A6A6A6A6A6A6A6
+/**
+ * AES-KW (key-wrap). Injects static IV into plaintext, adds counter, encrypts 6 times.
+ * Reduces block size from 16 to 8 bytes.
+ * Plaintext must be a non-empty multiple of 8 bytes with minimum 16 bytes.
+ * 8-byte inputs use aeskwp.
+ * Wrapped ciphertext must be a multiple of 8 bytes with minimum 24 bytes.
+ * For padded version, use aeskwp.
+ * See {@link https://www.rfc-editor.org/rfc/rfc3394/ | RFC 3394} and
+ * {@link https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-38F.pdf | NIST SP 800-38F}.
+ * @param kek - AES key-encryption key.
+ * @returns Key-wrap cipher instance.
+ * As with other `wrapCipher(...)` wrappers, `encrypt()` is single-use per
+ * instance.
+ * @example
+ * Wraps a 128-bit content-encryption key with a fresh key-encryption key.
+ *
+ * ```ts
+ * import { aeskw } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const kek = randomBytes(16);
+ * const cek = randomBytes(16);
+ * const wrap = aeskw(kek);
+ * wrap.encrypt(cek);
+ * ```
+ */
+const aeskw = /* @__PURE__ */ wrapCipher({ blockSize: 8 }, (kek) => ({
+    encrypt(plaintext) {
+        if (!plaintext.length || plaintext.length % 8 !== 0)
+            throw new Error('invalid plaintext length');
+        // RFC 3394 / NIST SP 800-38F define KW only for >=2 plaintext
+        // semiblocks; the 1-semiblock case belongs to RFC 5649 KWP.
+        if (plaintext.length === 8)
+            throw new Error('8-byte keys not allowed in AESKW, use AESKWP instead');
+        const out = concatBytes(AESKW_IV, plaintext);
+        AESW.encrypt(kek, out);
+        return out;
+    },
+    decrypt(ciphertext) {
+        // ciphertext must be at least 24 bytes and a multiple of 8 bytes
+        // 24 because should have at least two block (1 iv + 2).
+        // Replace with 16 to enable '8-byte keys'
+        if (ciphertext.length % 8 !== 0 || ciphertext.length < 3 * 8)
+            throw new Error('invalid ciphertext length');
+        // AESW.decrypt() mutates its buffer in place, so keep caller ciphertext
+        // immutable across the unwrap, ICV1 check, and IV scrubbing below.
+        const out = utils_copyBytes(ciphertext);
+        AESW.decrypt(kek, out);
+        if (!equalBytes(out.subarray(0, 8), AESKW_IV))
+            throw new Error('integrity check failed');
+        out.subarray(0, 8).fill(0); // ciphertext.subarray(0, 8) === IV, but we clean it anyway
+        return out.subarray(8);
+    },
+}));
+/*
+We don't support 8-byte keys. The rabbit hole:
+
+- Wycheproof says: "NIST SP 800-38F does not define the wrapping of 8 byte keys.
+  RFC 3394 Section 2  on the other hand specifies that 8 byte keys are wrapped
+  by directly encrypting one block with AES."
+    - {@link https://github.com/C2SP/wycheproof/blob/master/doc/key_wrap.md | Wycheproof key-wrap note}
+    - "RFC 3394 specifies in Section 2, that the input for the key wrap
+      algorithm must be at least two blocks and otherwise the constant
+      field and key are simply encrypted with ECB as a single block"
+- What RFC 3394 actually says (in Section 2):
+    - "Before being wrapped, the key data is parsed into n blocks of 64 bits.
+      The only restriction the key wrap algorithm places on n is that n be
+      at least two"
+    - "For key data with length less than or equal to 64 bits, the constant
+      field used in this specification and the key data form a single
+      128-bit codebook input making this key wrap unnecessary."
+- Which means "assert(n >= 2)" and "use something else for 8 byte keys"
+- NIST SP800-38F actually prohibits 8-byte in "5.3.1 Mandatory Limits".
+  It states that plaintext for KW should be "2 to 2^54 -1 semiblocks".
+- So, where does "directly encrypt single block with AES" come from?
+    - Not RFC 3394. Pseudocode of key wrap in 2.2 explicitly uses
+      loop of 6 for any code path
+    - There is a weird W3C spec:
+      {@link https://www.w3.org/TR/2002/REC-xmlenc-core-20021210/Overview.html#kw-aes128 | XML Encryption AES key-wrap section}
+    - This spec is outdated, as admitted by Wycheproof authors
+    - There is RFC 5649 for padded key wrap, which is padding construction on
+      top of AESKW. In '4.1.2' it says: "If the padded plaintext contains exactly
+      eight octets, then prepend the AIV as defined in Section 3 above to P[1] and
+      encrypt the resulting 128-bit block using AES in ECB mode [Modes] with key
+      K (the KEK).  In this case, the output is two 64-bit blocks C[0] and C[1]:"
+    - Browser subtle crypto is actually crashes on wrapping keys less than 16 bytes:
+      `Error: error:1C8000E6:Provider routines::invalid input length]
+       { opensslErrorStack: [ 'error:030000BD:digital envelope routines::update error' ]`
+
+In the end, seems like a bug in Wycheproof.
+The 8-byte check can be easily disabled inside of AES_W.
+*/
+// RFC 5649 §3 / NIST SP 800-38F Algorithm 5 / Algorithm 6: KWP uses ICV2 as
+// the high 32 bits of the AIV; the low 32 bits carry the MLI in network order.
+const AESKWP_IV = 0xa65959a6; // single u32le value
+/**
+ * AES-KW, but with padding and allows random keys.
+ * Uses the RFC 5649 alternative initial value; the second u32 stores the
+ * 32-bit MLI in network order.
+ * Wrapped ciphertext must be at least 16 bytes; malformed lengths are
+ * rejected during AIV/padding checks.
+ * See {@link https://www.rfc-editor.org/rfc/rfc5649 | RFC 5649}.
+ * @param kek - AES key-encryption key.
+ * @returns Padded key-wrap cipher instance.
+ * @example
+ * Wraps a short key blob using the padded variant and a fresh key-encryption key.
+ *
+ * ```ts
+ * import { aeskwp } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const kek = randomBytes(16);
+ * const wrap = aeskwp(kek);
+ * wrap.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const aeskwp = /* @__PURE__ */ wrapCipher({ blockSize: 8 }, (kek) => ({
+    encrypt(plaintext) {
+        if (!plaintext.length)
+            throw new Error('invalid plaintext length');
+        const padded = Math.ceil(plaintext.length / 8) * 8;
+        const out = new Uint8Array(8 + padded);
+        out.set(plaintext, 8);
+        const out32 = u32(out);
+        out32[0] = swap8IfBE(AESKWP_IV);
+        // RFC 5649 §3: the low 32 bits of the AIV carry the octet-length MLI in
+        // network order, even though this buffer is addressed through LE u32s.
+        out32[1] = swap8IfBE(byteSwap(plaintext.length));
+        AESW.encrypt(kek, out);
+        return out;
+    },
+    decrypt(ciphertext) {
+        // 16 because should have at least one block
+        if (ciphertext.length < 16)
+            throw new Error('invalid ciphertext length');
+        // AESW.decrypt() mutates its buffer in place, so keep caller ciphertext
+        // immutable across the unwrap, AIV checks, and IV scrubbing below.
+        const out = utils_copyBytes(ciphertext);
+        const o32 = u32(out);
+        AESW.decrypt(kek, out);
+        const len = byteSwap(swap8IfBE(o32[1])) >>> 0;
+        const padded = Math.ceil(len / 8) * 8;
+        if (swap8IfBE(o32[0]) !== AESKWP_IV || out.length - 8 !== padded)
+            throw new Error('integrity check failed');
+        // RFC 5649 §3 / NIST SP 800-38F Algorithm 6: recovered padding length
+        // must be in [0,7], and every recovered pad octet must be zero.
+        for (let i = len; i < padded; i++)
+            if (out[8 + i] !== 0)
+                throw new Error('integrity check failed');
+        out.subarray(0, 8).fill(0); // ciphertext.subarray(0, 8) === IV, but we clean it anyway
+        return out.subarray(8, 8 + len);
+    },
+}));
+class _AesCtrDRBG {
+    blockLen;
+    key;
+    nonce;
+    state;
+    reseedCnt;
+    constructor(keyLen, seed, personalization) {
+        this.blockLen = ctr.blockSize;
+        const keyLenBytes = keyLen / 8;
+        const nonceLen = 16;
+        // Store the full seedlen state as key || V so CTR_DRBG_Update-style steps
+        // can rewrite the entire internal state in place.
+        this.state = new Uint8Array(keyLenBytes + nonceLen);
+        this.key = this.state.subarray(0, keyLenBytes);
+        this.nonce = this.state.subarray(keyLenBytes, keyLenBytes + nonceLen);
+        this.reseedCnt = 1;
+        // Keep the stored counter one step ahead of SP 800-90A's formal V so
+        // ctr(key, nonce) uses the next counter block directly.
+        incBytes(this.nonce, false, 1);
+        this.addEntropy(seed, personalization);
+    }
+    update(data) {
+        // cannot re-use state here, because we will wipe current key
+        ctr(this.key, this.nonce).encrypt(new Uint8Array(this.state.length), this.state);
+        if (data) {
+            abytes(data);
+            // CTR_DRBG without a derivation function pads shorter additional_input
+            // with zeros to seedlen, so XOR only the provided prefix here.
+            for (let i = 0; i < data.length; i++)
+                this.state[i] ^= data[i];
+        }
+        // Keep storing V+1 so the next ctr(key, nonce) call starts from the
+        // spec's post-update counter state.
+        incBytes(this.nonce, false, 1);
+    }
+    // Optional `info` is additional input XORed into the reseed block and is
+    // limited to the internal state width.
+    addEntropy(seed, info) {
+        abytes(seed, this.state.length, 'seed');
+        // Copy caller entropy before XORing in personalization/additional input,
+        // then wipe the mixed seed material after CTR_DRBG_Update consumes it.
+        const _seed = seed.slice();
+        if (info) {
+            abytes(info);
+            if (info.length > _seed.length)
+                throw new Error('info length is too big');
+            for (let i = 0; i < info.length; i++)
+                _seed[i] ^= info[i];
+        }
+        this.update(_seed);
+        _seed.fill(0);
+        this.reseedCnt = 1;
+    }
+    // Optional `info` is additional input for the pre/post-update steps; bytes
+    // SP 800-90A Rev. 1 CTR_DRBG without a derivation function limits
+    // additional_input to seedlen, which is exactly this internal state width.
+    randomBytes(len, info) {
+        anumber(len);
+        // SP 800-90A Table 3 caps AES CTR_DRBG requests at 2^16 bits = 65536 bytes.
+        if (len > 2 ** 16)
+            throw new Error('requested output is too big');
+        // The spec allows generate while reseed_counter == reseed_interval and increments afterwards.
+        if (this.reseedCnt > 2 ** 48)
+            throw new Error('entropy exhausted');
+        if (info) {
+            abytes(info);
+            if (info.length > this.state.length)
+                throw new Error('info length is too big');
+            this.update(info);
+        }
+        const res = new Uint8Array(len);
+        ctr(this.key, this.nonce).encrypt(res, res);
+        incBytes(this.nonce, false, Math.ceil(len / this.blockLen));
+        this.update(info);
+        this.reseedCnt++;
+        return res;
+    }
+    // Zeroes the current state and resets the counter, but does not make the
+    // instance unusable: later calls continue from the zeroed state.
+    clean() {
+        // `key` and `nonce` alias this backing buffer, so one fill wipes the full
+        // secret state in place.
+        this.state.fill(0);
+        this.reseedCnt = 0;
+    }
+}
+// Internal helper for the exported 128-bit and 256-bit aliases; other key
+// lengths are not validated here.
+const createAesDrbg = (keyLen) => {
+    return (seed, personalization = undefined) => new _AesCtrDRBG(keyLen, seed, personalization);
+};
+/**
+ * AES-CTR DRBG 128-bit - CSPRNG (cryptographically secure pseudorandom number generator).
+ * It's best to limit usage to non-production, non-critical cases: for example, test-only.
+ * @param seed - Initial 32-byte entropy input.
+ * @param personalization - Optional personalization string.
+ * @returns Seeded DRBG instance. The concrete methods also accept optional additional-input bytes.
+ * @example
+ * Seeds the test-only AES-CTR DRBG from fresh entropy and reads bytes from it.
+ *
+ * ```ts
+ * import { rngAesCtrDrbg128 } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const seed = randomBytes(32);
+ * const prg = rngAesCtrDrbg128(seed);
+ * prg.randomBytes(8);
+ * ```
+ */
+const rngAesCtrDrbg128 = /* @__PURE__ */ (/* unused pure expression or super */ null && (createAesDrbg(128)));
+/**
+ * AES-CTR DRBG 256-bit - CSPRNG (cryptographically secure pseudorandom number generator).
+ * It's best to limit usage to non-production, non-critical cases: for example, test-only.
+ * @param seed - Initial 48-byte entropy input.
+ * @param personalization - Optional personalization string.
+ * @returns Seeded DRBG instance. The concrete methods also accept optional additional-input bytes.
+ * @example
+ * Seeds the test-only AES-CTR DRBG from fresh entropy and reads bytes from it.
+ *
+ * ```ts
+ * import { rngAesCtrDrbg256 } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const seed = randomBytes(48);
+ * const prg = rngAesCtrDrbg256(seed);
+ * prg.randomBytes(8);
+ * ```
+ */
+const rngAesCtrDrbg256 = /* @__PURE__ */ (/* unused pure expression or super */ null && (createAesDrbg(256)));
+//#region CMAC
+/**
+ * Left-shift by one bit and conditionally XOR with 0x87:
+ * ```
+ * if MSB(L) is equal to 0
+ * then    K1 := L << 1;
+ * else    K1 := (L << 1) XOR const_Rb;
+ * ```
+ *
+ * Specs:
+ * {@link https://www.rfc-editor.org/rfc/rfc4493.html#section-2.3 | RFC 4493 Section 2.3},
+ * {@link https://datatracker.ietf.org/doc/html/rfc5297.html#section-2.3 | RFC 5297 Section 2.3}
+ *
+ * @returns modified `block` (for chaining)
+ */
+function dbl(block) {
+    let carry = 0;
+    // Left shift by 1 bit
+    for (let i = aes_BLOCK_SIZE - 1; i >= 0; i--) {
+        const newCarry = (block[i] & 0x80) >>> 7;
+        block[i] = (block[i] << 1) | carry;
+        carry = newCarry;
+    }
+    // XOR with 0x87 if there was a carry from the most significant bit
+    if (carry) {
+        // RFC 4493 §2.3 / RFC 5297 §2.1: 0x87 is const_Rb for doubling in the
+        // CMAC/S2V finite field with primitive polynomial x^128 + x^7 + x^2 + x + 1.
+        block[aes_BLOCK_SIZE - 1] ^= 0x87;
+    }
+    return block;
+}
+/**
+ * `a XOR b`, running in-place on `a`.
+ * @param a left operand and output
+ * @param b right operand
+ * @returns `a` (for chaining)
+ */
+function xorBlock(a, b) {
+    if (a.length !== b.length)
+        throw new Error('xorBlock: blocks must have same length');
+    for (let i = 0; i < a.length; i++) {
+        a[i] = a[i] ^ b[i];
+    }
+    return a;
+}
+/**
+ * xorend as defined in
+ * {@link https://datatracker.ietf.org/doc/html/rfc5297.html#section-2.1 | RFC 5297 Section 2.1}.
+ *
+ * ```
+ * leftmost(A, len(A)-len(B)) || (rightmost(A, len(B)) xor B)
+ * ```
+ *
+ * Mutates `a` in place so the left prefix stays untouched and only the
+ * rightmost `len(B)` bytes are xored with `b`.
+ */
+function xorend(a, b) {
+    if (b.length > a.length) {
+        throw new Error('xorend: len(B) must be less than or equal to len(A)');
+    }
+    // keep leftmost part of `a` unchanged
+    // and xor only the rightmost part:
+    const offset = a.length - b.length;
+    for (let i = 0; i < b.length; i++) {
+        a[offset + i] = a[offset + i] ^ b[i];
+    }
+    return a;
+}
+/**
+ * Internal CMAC class.
+ */
+class _CMAC {
+    blockLen = aes_BLOCK_SIZE;
+    outputLen = aes_BLOCK_SIZE;
+    // CMAC can only decide between `K1` and `K2` once the true final block is known,
+    // so updates process older blocks eagerly but keep one pending block buffered.
+    buffer;
+    pos;
+    finished;
+    destroyed;
+    k1;
+    k2;
+    x;
+    xk;
+    constructor(key) {
+        utils_abytes(key);
+        validateKeyLength(key);
+        this.xk = expandKeyLE(key);
+        this.buffer = new Uint8Array(aes_BLOCK_SIZE);
+        this.pos = 0;
+        this.finished = false;
+        this.destroyed = false;
+        this.x = new Uint8Array(aes_BLOCK_SIZE);
+        // L = AES_encrypt(K, const_Zero)
+        const L = new Uint8Array(aes_BLOCK_SIZE);
+        encryptBlock(this.xk, L);
+        // Generate subkeys K1 and K2 from the main key according to
+        // {@link https://www.rfc-editor.org/rfc/rfc4493.html#section-2.3 | RFC 4493 Section 2.3}
+        // K1
+        this.k1 = dbl(L);
+        this.k2 = dbl(new Uint8Array(this.k1));
+    }
+    process(data) {
+        // RFC 4493 §2.4 step 6 loop body: Y := X XOR M_i; X := AES-128(K, Y).
+        xorBlock(this.x, data);
+        encryptBlock(this.xk, this.x);
+    }
+    update(data) {
+        if (this.destroyed)
+            throw new Error('Hash instance has been destroyed');
+        if (this.finished)
+            throw new Error('Hash#digest() has already been called');
+        utils_abytes(data);
+        let pos = 0;
+        if (this.pos) {
+            const take = Math.min(aes_BLOCK_SIZE - this.pos, data.length);
+            this.buffer.set(data.subarray(0, take), this.pos);
+            this.pos += take;
+            pos = take;
+            if (this.pos === aes_BLOCK_SIZE && pos < data.length) {
+                this.process(this.buffer);
+                this.pos = 0;
+            }
+        }
+        // Keep one complete block buffered: an exact 16-byte tail may still be
+        // M_n, and digestInto() must decide there whether RFC 4493 uses K1 or K2.
+        while (pos + aes_BLOCK_SIZE < data.length) {
+            this.process(data.subarray(pos, pos + aes_BLOCK_SIZE));
+            pos += aes_BLOCK_SIZE;
+        }
+        if (pos < data.length) {
+            this.buffer.set(data.subarray(pos), 0);
+            this.pos = data.length - pos;
+        }
+        return this;
+    }
+    // See {@link https://www.rfc-editor.org/rfc/rfc4493.html#section-2.4 | RFC 4493 Section 2.4}.
+    digestInto(out) {
+        if (this.destroyed)
+            throw new Error('Hash instance has been destroyed');
+        if (this.finished)
+            throw new Error('Hash#digest() has already been called');
+        // `digestInto(out)` is the no-allocation fast path, so AES block re-use below
+        // requires a 32-bit-aligned caller buffer instead of hidden temp copies.
+        aoutput(out, this, true);
+        this.finished = true;
+        // `digestInto()` accepts out.length >= outputLen, so only the first block stores the tag.
+        const view = out.subarray(0, this.outputLen);
+        let last = new Uint8Array(aes_BLOCK_SIZE);
+        if (this.pos === aes_BLOCK_SIZE) {
+            // M_last := M_n XOR K1;
+            last.set(this.buffer);
+            xorBlock(last, this.k1);
+        }
+        else {
+            // M_last := padding(M_n) XOR K2;
+            //
+            // [...] padding(x) is the concatenation of x and a single '1',
+            // followed by the minimum number of '0's, so that the total length is
+            // equal to 128 bits.
+            last.set(this.buffer.subarray(0, this.pos));
+            last[this.pos] = 0x80; // single '1' bit
+            xorBlock(last, this.k2);
+        }
+        view.set(this.x); // X := AES_CBC(K, M_1..M_{n-1})
+        xorBlock(view, last); // Y := X XOR M_last
+        encryptBlock(this.xk, view); // T := AES-128(K, Y)
+        clean(last);
+    }
+    digest() {
+        const { buffer, outputLen } = this;
+        this.digestInto(buffer);
+        // Copy out before destroy() wipes the internal digest buffer in place.
+        const res = buffer.slice(0, outputLen);
+        this.destroy();
+        return res;
+    }
+    destroy() {
+        const { buffer, destroyed, x, xk, k1, k2 } = this;
+        if (destroyed)
+            return;
+        this.destroyed = true;
+        // Wipe the buffered tail, chaining value, expanded AES key, and both CMAC subkeys.
+        clean(buffer, x, xk, k1, k2);
+    }
+}
+/**
+ * AES-CMAC (Cipher-based Message Authentication Code).
+ * Specs: {@link https://www.rfc-editor.org/rfc/rfc4493.html | RFC 4493}.
+ * @param msg - Message bytes to authenticate.
+ * @param key - AES key bytes.
+ * @returns 16-byte authentication tag. `cmac.create(...)` follows the same incremental MAC shape as
+ * the other keyed helpers in this repo, including `blockLen`,
+ * `outputLen`, `digestInto()` and `destroy()`.
+ * @example
+ * Authenticates a message with AES-CMAC and a fresh key.
+ *
+ * ```ts
+ * import { cmac } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * cmac(new Uint8Array(), key);
+ * ```
+ */
+// The 16-byte probe key is only used to read static metadata; runtime CMAC
+// still accepts AES-128/192/256 keys.
+const cmac = /* @__PURE__ */ wrapMacConstructor(16, (key) => new _CMAC(key));
+/**
+ * S2V (Synthetic Initialization Vector) function as described in
+ * {@link https://datatracker.ietf.org/doc/html/rfc5297.html#section-2.4 | RFC 5297 Section 2.4}.
+ *
+ * ```
+ * S2V(K, S1, ..., Sn) {
+ *   if n = 0 then
+ *     return V = AES-CMAC(K, <one>)
+ *   fi
+ *   D = AES-CMAC(K, <zero>)
+ *   for i = 1 to n-1 do
+ *     D = dbl(D) xor AES-CMAC(K, Si)
+ *   done
+ *   if len(Sn) >= 128 then
+ *     T = Sn xorend D
+ *   else
+ *     T = dbl(D) xor pad(Sn)
+ *   fi
+ *   return V = AES-CMAC(K, T)
+ * }
+ * ```
+ *
+ * S2V takes a key and a vector of strings S1, S2, ..., Sn and returns a 128-bit string.
+ * The S2V function is used to generate a synthetic IV for AES-SIV.
+ *
+ * @param key - AES key (128, 192, or 256 bits)
+ * @param strings - Array of byte arrays to process
+ * @returns 128-bit synthetic IV
+ */
+function s2v(key, strings) {
+    validateKeyLength(key);
+    const len = strings.length;
+    if (len > 127) {
+        // RFC 5297 §7 only proves S2V secure for at most 127 components; SIV
+        // spends one of those on the plaintext, leaving at most 126 AAD inputs.
+        throw new Error('s2v: number of input strings must be less than or equal to 127');
+    }
+    if (len === 0)
+        return cmac(ONE_BLOCK, key);
+    // D = AES-CMAC(K, <zero>)
+    let d = cmac(EMPTY_BLOCK, key);
+    // for i = 1 to n-1 do
+    //   D = dbl(D) xor AES-CMAC(K, Si)
+    for (let i = 0; i < len - 1; i++) {
+        dbl(d);
+        const cmacResult = cmac(strings[i], key);
+        xorBlock(d, cmacResult);
+        clean(cmacResult);
+    }
+    const s_n = strings[len - 1];
+    // Earlier components are validated through cmac(...); validate the final one explicitly because
+    // the Uint8Array.from()/set() paths below would otherwise coerce array-like inputs silently.
+    utils_abytes(s_n);
+    let t;
+    // if len(Sn) >= 128 then
+    if (s_n.byteLength >= aes_BLOCK_SIZE) {
+        // T = Sn xorend D
+        t = xorend(Uint8Array.from(s_n), d);
+    }
+    else {
+        // pad(Sn):
+        const paddedSn = new Uint8Array(aes_BLOCK_SIZE);
+        paddedSn.set(s_n);
+        paddedSn[s_n.length] = 0x80; // padding: 0x80 followed by zeros
+        // T = dbl(D) xor pad(Sn)
+        t = xorBlock(dbl(d), paddedSn);
+        clean(paddedSn);
+    }
+    // V = AES-CMAC(K, T)
+    const result = cmac(t, key);
+    clean(d, t);
+    return result;
+}
+/**
+ * Use `gcmsiv` or `aessiv`.
+ * @returns Never; always throws with the migration hint.
+ * @throws If called; `siv()` is a removed v1 alias. {@link Error}
+ * @example
+ * `siv()` was removed in v2; use `gcmsiv()` for nonce-based SIV instead.
+ *
+ * ```ts
+ * import { gcmsiv } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(16);
+ * const nonce = randomBytes(12);
+ * const cipher = gcmsiv(key, nonce);
+ * cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const siv = () => {
+    throw new Error('"siv" from v1 is now "gcmsiv"');
+};
+/**
+ * **SIV**: Synthetic Initialization Vector (SIV) Authenticated Encryption
+ * Nonce is derived from the plaintext and AAD using the S2V function.
+ * Supports at most 126 AAD components. RFC 5297 nonce-based use is expressed by
+ * passing the nonce as the final AAD component before the plaintext.
+ * See {@link https://datatracker.ietf.org/doc/html/rfc5297.html | RFC 5297}.
+ * @param key - 32-byte, 48-byte, or 64-byte key.
+ * @param AAD - Additional authenticated data chunks (up to 126).
+ * @returns AEAD cipher instance.
+ * @example
+ * Authenticates and encrypts plaintext with a fresh key without requiring unique nonces.
+ *
+ * ```ts
+ * import { aessiv } from '@noble/ciphers/aes.js';
+ * import { randomBytes } from '@noble/ciphers/utils.js';
+ * const key = randomBytes(32);
+ * const cipher = aessiv(key);
+ * cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+const aessiv = /* @__PURE__ */ wrapCipher({ blockSize: 16, tagLength: 16 }, function aessiv(key, ...AAD) {
+    // From RFC 5297: Section 6.1, 6.2, 6.3:
+    const PLAIN_LIMIT = limit('plaintext', 0, 2 ** 132);
+    const CIPHER_LIMIT = limit('ciphertext', 16, 2 ** 132 + 16);
+    if (AAD.length > 126) {
+        // RFC 5297 §2.6 / §2.7 / §7: SIV passes the plaintext as the last S2V
+        // component, so callers only get 126 associated-data components.
+        throw new Error('"AAD" number of elements must be less than or equal to 126');
+    }
+    AAD.forEach((aad) => utils_abytes(aad));
+    utils_abytes(key);
+    if (![32, 48, 64].includes(key.length))
+        throw new Error('"aes key" expected Uint8Array of length 32/48/64, got length=' + key.length);
+    // The key is split into equal halves, K1 = leftmost(K, len(K)/2) and
+    // K2 = rightmost(K, len(K)/2).  K1 is used for S2V and K2 is used for CTR.
+    // This borrows caller key/AAD buffers by reference; mutating them after
+    // construction changes future encrypt/decrypt results.
+    const k1 = key.subarray(0, key.length / 2);
+    const k2 = key.subarray(key.length / 2);
+    return {
+        // {@link https://datatracker.ietf.org/doc/html/rfc5297.html#section-2.6 | RFC 5297 Section 2.6}
+        encrypt(plaintext) {
+            PLAIN_LIMIT(plaintext.length);
+            const v = s2v(k1, [...AAD, plaintext]);
+            // clear out the 31st and 63rd (rightmost) bit:
+            const q = Uint8Array.from(v);
+            q[8] &= 0x7f;
+            q[12] &= 0x7f;
+            // encrypt:
+            const c = ctr(k2, q).encrypt(plaintext);
+            return concatBytes(v, c);
+        },
+        // {@link https://datatracker.ietf.org/doc/html/rfc5297.html#section-2.7 | RFC 5297 Section 2.7}
+        decrypt(ciphertext) {
+            CIPHER_LIMIT(ciphertext.length);
+            const v = ciphertext.subarray(0, aes_BLOCK_SIZE);
+            const c = ciphertext.subarray(aes_BLOCK_SIZE);
+            // clear out the 31st and 63rd (rightmost) bit:
+            const q = Uint8Array.from(v);
+            q[8] &= 0x7f;
+            q[12] &= 0x7f;
+            // decrypt:
+            const p = ctr(k2, q).decrypt(c);
+            // verify tag:
+            const t = s2v(k1, [...AAD, p]);
+            if (equalBytes(t, v)) {
+                return p;
+            }
+            else {
+                throw new Error('invalid siv tag');
+            }
+        },
+    };
+});
+//#endregion
+/**
+ * Unsafe low-level internal methods. May change at any time.
+ * Callers are expected to use reviewed expanded-key outputs, pass mutable and
+ * aligned 16-byte blocks where required, and treat several helpers as in-place
+ * mutations of their input buffers or counters.
+ */
+const unsafe = /* @__PURE__ */ Object.freeze({
+    expandKeyLE,
+    expandKeyDecLE,
+    encrypt,
+    decrypt,
+    encryptBlock,
+    decryptBlock,
+    ctrCounter,
+    ctr32,
+    dbl,
+    xorBlock,
+    xorend,
+    s2v,
+});
+const __TESTS = /* @__PURE__ */ Object.freeze({
+    incBytes: incBytes,
+});
+//# sourceMappingURL=aes.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/hashes/utils.js
+/**
+ * Checks if something is Uint8Array. Be careful: nodejs Buffer will return true.
+ * @param a - value to test
+ * @returns `true` when the value is a Uint8Array-compatible view.
+ * @example
+ * Check whether a value is a Uint8Array-compatible view.
+ * ```ts
+ * isBytes(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+function hashes_utils_isBytes(a) {
+    // Plain `instanceof Uint8Array` is too strict for some Buffer / proxy / cross-realm cases.
+    // The fallback still requires a real ArrayBuffer view, so plain
+    // JSON-deserialized `{ constructor: ... }` spoofing is rejected, and
+    // `BYTES_PER_ELEMENT === 1` keeps the fallback on byte-oriented views.
+    return (a instanceof Uint8Array ||
+        (ArrayBuffer.isView(a) &&
+            a.constructor.name === 'Uint8Array' &&
+            'BYTES_PER_ELEMENT' in a &&
+            a.BYTES_PER_ELEMENT === 1));
+}
+/**
+ * Asserts something is a non-negative integer.
+ * @param n - number to validate
+ * @param title - label included in thrown errors
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Validate a non-negative integer option.
+ * ```ts
+ * anumber(32, 'length');
+ * ```
+ */
+function hashes_utils_anumber(n, title = '') {
+    if (typeof n !== 'number') {
+        const prefix = title && `"${title}" `;
+        throw new TypeError(`${prefix}expected number, got ${typeof n}`);
+    }
+    if (!Number.isSafeInteger(n) || n < 0) {
+        const prefix = title && `"${title}" `;
+        throw new RangeError(`${prefix}expected integer >= 0, got ${n}`);
+    }
+}
+/**
+ * Asserts something is Uint8Array.
+ * @param value - value to validate
+ * @param length - optional exact length constraint
+ * @param title - label included in thrown errors
+ * @returns The validated byte array.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Validate that a value is a byte array.
+ * ```ts
+ * abytes(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+function hashes_utils_abytes(value, length, title = '') {
+    const bytes = hashes_utils_isBytes(value);
+    const len = value?.length;
+    const needsLen = length !== undefined;
+    if (!bytes || (needsLen && len !== length)) {
+        const prefix = title && `"${title}" `;
+        const ofLen = needsLen ? ` of length ${length}` : '';
+        const got = bytes ? `length=${len}` : `type=${typeof value}`;
+        const message = prefix + 'expected Uint8Array' + ofLen + ', got ' + got;
+        if (!bytes)
+            throw new TypeError(message);
+        throw new RangeError(message);
+    }
+    return value;
+}
+/**
+ * Copies bytes into a fresh Uint8Array.
+ * Buffer-style slices can alias the same backing store, so callers that need ownership should copy.
+ * @param bytes - source bytes to clone
+ * @returns Freshly allocated copy of `bytes`.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Clone a byte array before mutating it.
+ * ```ts
+ * const copy = copyBytes(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+function hashes_utils_copyBytes(bytes) {
+    // `Uint8Array.from(...)` would also accept arrays / other typed arrays. Keep this helper strict
+    // because callers use it at byte-validation boundaries before mutating the detached copy.
+    return Uint8Array.from(hashes_utils_abytes(bytes));
+}
+/**
+ * Asserts something is a wrapped hash constructor.
+ * @param h - hash constructor to validate
+ * @throws On wrong argument types or invalid hash wrapper shape. {@link TypeError}
+ * @throws On invalid hash metadata ranges or values. {@link RangeError}
+ * @throws If the hash metadata allows empty outputs or block sizes. {@link Error}
+ * @example
+ * Validate a callable hash wrapper.
+ * ```ts
+ * import { ahash } from '@noble/hashes/utils.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * ahash(sha256);
+ * ```
+ */
+function ahash(h) {
+    if (typeof h !== 'function' || typeof h.create !== 'function')
+        throw new TypeError('Hash must wrapped by utils.createHasher');
+    hashes_utils_anumber(h.outputLen);
+    hashes_utils_anumber(h.blockLen);
+    // HMAC and KDF callers treat these as real byte lengths; allowing zero lets fake wrappers pass
+    // validation and can produce empty outputs instead of failing fast.
+    if (h.outputLen < 1)
+        throw new Error('"outputLen" must be >= 1');
+    if (h.blockLen < 1)
+        throw new Error('"blockLen" must be >= 1');
+}
+/**
+ * Asserts a hash instance has not been destroyed or finished.
+ * @param instance - hash instance to validate
+ * @param checkFinished - whether to reject finalized instances
+ * @throws If the hash instance has already been destroyed or finalized. {@link Error}
+ * @example
+ * Validate that a hash instance is still usable.
+ * ```ts
+ * import { aexists } from '@noble/hashes/utils.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * const hash = sha256.create();
+ * aexists(hash);
+ * ```
+ */
+function utils_aexists(instance, checkFinished = true) {
+    if (instance.destroyed)
+        throw new Error('Hash instance has been destroyed');
+    if (checkFinished && instance.finished)
+        throw new Error('Hash#digest() has already been called');
+}
+/**
+ * Asserts output is a sufficiently-sized byte array.
+ * @param out - destination buffer
+ * @param instance - hash instance providing output length
+ * Oversized buffers are allowed; downstream code only promises to fill the first `outputLen` bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Validate a caller-provided digest buffer.
+ * ```ts
+ * import { aoutput } from '@noble/hashes/utils.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * const hash = sha256.create();
+ * aoutput(new Uint8Array(hash.outputLen), hash);
+ * ```
+ */
+function utils_aoutput(out, instance) {
+    hashes_utils_abytes(out, undefined, 'digestInto() output');
+    const min = instance.outputLen;
+    if (out.length < min) {
+        throw new RangeError('"digestInto() output" expected to be of length >=' + min);
+    }
+}
+/**
+ * Casts a typed array view to Uint8Array.
+ * @param arr - source typed array
+ * @returns Uint8Array view over the same buffer.
+ * @example
+ * Reinterpret a typed array as bytes.
+ * ```ts
+ * u8(new Uint32Array([1, 2]));
+ * ```
+ */
+function utils_u8(arr) {
+    return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+/**
+ * Casts a typed array view to Uint32Array.
+ * `arr.byteOffset` must already be 4-byte aligned or the platform
+ * Uint32Array constructor will throw.
+ * @param arr - source typed array
+ * @returns Uint32Array view over the same buffer.
+ * @example
+ * Reinterpret a byte array as 32-bit words.
+ * ```ts
+ * u32(new Uint8Array(8));
+ * ```
+ */
+function utils_u32(arr) {
+    return new Uint32Array(arr.buffer, arr.byteOffset, Math.floor(arr.byteLength / 4));
+}
+/**
+ * Zeroizes typed arrays in place. Warning: JS provides no guarantees.
+ * @param arrays - arrays to overwrite with zeros
+ * @example
+ * Zeroize sensitive buffers in place.
+ * ```ts
+ * clean(new Uint8Array([1, 2, 3]));
+ * ```
+ */
+function utils_clean(...arrays) {
+    for (let i = 0; i < arrays.length; i++) {
+        arrays[i].fill(0);
+    }
+}
+/**
+ * Creates a DataView for byte-level manipulation.
+ * @param arr - source typed array
+ * @returns DataView over the same buffer region.
+ * @example
+ * Create a DataView over an existing buffer.
+ * ```ts
+ * createView(new Uint8Array(4));
+ * ```
+ */
+function utils_createView(arr) {
+    return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+/**
+ * Rotate-right operation for uint32 values.
+ * @param word - source word
+ * @param shift - shift amount in bits
+ * @returns Rotated word.
+ * @example
+ * Rotate a 32-bit word to the right.
+ * ```ts
+ * rotr(0x12345678, 8);
+ * ```
+ */
+function rotr(word, shift) {
+    return (word << (32 - shift)) | (word >>> shift);
+}
+/**
+ * Rotate-left operation for uint32 values.
+ * @param word - source word
+ * @param shift - shift amount in bits
+ * @returns Rotated word.
+ * @example
+ * Rotate a 32-bit word to the left.
+ * ```ts
+ * rotl(0x12345678, 8);
+ * ```
+ */
+function rotl(word, shift) {
+    return (word << shift) | ((word >>> (32 - shift)) >>> 0);
+}
+/** Whether the current platform is little-endian. */
+const utils_isLE = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => new Uint8Array(new Uint32Array([0x11223344]).buffer)[0] === 0x44)()));
+/**
+ * Byte-swap operation for uint32 values.
+ * @param word - source word
+ * @returns Word with reversed byte order.
+ * @example
+ * Reverse the byte order of a 32-bit word.
+ * ```ts
+ * byteSwap(0x11223344);
+ * ```
+ */
+function utils_byteSwap(word) {
+    return (((word << 24) & 0xff000000) |
+        ((word << 8) & 0xff0000) |
+        ((word >>> 8) & 0xff00) |
+        ((word >>> 24) & 0xff));
+}
+/**
+ * Conditionally byte-swaps one 32-bit word on big-endian platforms.
+ * @param n - source word
+ * @returns Original or byte-swapped word depending on platform endianness.
+ * @example
+ * Normalize a 32-bit word for host endianness.
+ * ```ts
+ * swap8IfBE(0x11223344);
+ * ```
+ */
+const utils_swap8IfBE = (/* unused pure expression or super */ null && (utils_isLE
+    ? (n) => n
+    : (n) => utils_byteSwap(n) >>> 0));
+/**
+ * Byte-swaps every word of a Uint32Array in place.
+ * @param arr - array to mutate
+ * @returns The same array after mutation; callers pass live state arrays here.
+ * @example
+ * Reverse the byte order of every word in place.
+ * ```ts
+ * byteSwap32(new Uint32Array([0x11223344]));
+ * ```
+ */
+function utils_byteSwap32(arr) {
+    for (let i = 0; i < arr.length; i++) {
+        arr[i] = utils_byteSwap(arr[i]);
+    }
+    return arr;
+}
+/**
+ * Conditionally byte-swaps a Uint32Array on big-endian platforms.
+ * @param u - array to normalize for host endianness
+ * @returns Original or byte-swapped array depending on platform endianness.
+ *   On big-endian runtimes this mutates `u` in place via `byteSwap32(...)`.
+ * @example
+ * Normalize a word array for host endianness.
+ * ```ts
+ * swap32IfBE(new Uint32Array([0x11223344]));
+ * ```
+ */
+const utils_swap32IfBE = (/* unused pure expression or super */ null && (utils_isLE
+    ? (u) => u
+    : utils_byteSwap32));
+// Built-in hex conversion https://caniuse.com/mdn-javascript_builtins_uint8array_fromhex
+const utils_hasHexBuiltin = /* @__PURE__ */ (() =>
+// @ts-ignore
+typeof Uint8Array.from([]).toHex === 'function' && typeof Uint8Array.fromHex === 'function')();
+// Array where index 0xf0 (240) is mapped to string 'f0'
+const utils_hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+/**
+ * Convert byte array to hex string.
+ * Uses the built-in function when available and assumes it matches the tested
+ * fallback semantics.
+ * @param bytes - bytes to encode
+ * @returns Lowercase hexadecimal string.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Convert bytes to lowercase hexadecimal.
+ * ```ts
+ * bytesToHex(Uint8Array.from([0xca, 0xfe, 0x01, 0x23])); // 'cafe0123'
+ * ```
+ */
+function utils_bytesToHex(bytes) {
+    hashes_utils_abytes(bytes);
+    // @ts-ignore
+    if (utils_hasHexBuiltin)
+        return bytes.toHex();
+    // pre-caching improves the speed 6x
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+        hex += utils_hexes[bytes[i]];
+    }
+    return hex;
+}
+// We use optimized technique to convert hex string to byte array
+const utils_asciis = { _0: 48, _9: 57, A: 65, F: 70, a: 97, f: 102 };
+function utils_asciiToBase16(ch) {
+    if (ch >= utils_asciis._0 && ch <= utils_asciis._9)
+        return ch - utils_asciis._0; // '2' => 50-48
+    if (ch >= utils_asciis.A && ch <= utils_asciis.F)
+        return ch - (utils_asciis.A - 10); // 'B' => 66-(65-10)
+    if (ch >= utils_asciis.a && ch <= utils_asciis.f)
+        return ch - (utils_asciis.a - 10); // 'b' => 98-(97-10)
+    return;
+}
+/**
+ * Convert hex string to byte array. Uses built-in function, when available.
+ * @param hex - hexadecimal string to decode
+ * @returns Decoded bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Decode lowercase hexadecimal into bytes.
+ * ```ts
+ * hexToBytes('cafe0123'); // Uint8Array.from([0xca, 0xfe, 0x01, 0x23])
+ * ```
+ */
+function utils_hexToBytes(hex) {
+    if (typeof hex !== 'string')
+        throw new TypeError('hex string expected, got ' + typeof hex);
+    if (utils_hasHexBuiltin) {
+        try {
+            return Uint8Array.fromHex(hex);
+        }
+        catch (error) {
+            if (error instanceof SyntaxError)
+                throw new RangeError(error.message);
+            throw error;
+        }
+    }
+    const hl = hex.length;
+    const al = hl / 2;
+    if (hl % 2)
+        throw new RangeError('hex string expected, got unpadded hex of length ' + hl);
+    const array = new Uint8Array(al);
+    for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
+        const n1 = utils_asciiToBase16(hex.charCodeAt(hi));
+        const n2 = utils_asciiToBase16(hex.charCodeAt(hi + 1));
+        if (n1 === undefined || n2 === undefined) {
+            const char = hex[hi] + hex[hi + 1];
+            throw new RangeError('hex string expected, got non-hex character "' + char + '" at index ' + hi);
+        }
+        array[ai] = n1 * 16 + n2; // multiply first octet, e.g. 'a3' => 10*16+3 => 160 + 3 => 163
+    }
+    return array;
+}
+/**
+ * There is no setImmediate in browser and setTimeout is slow.
+ * This yields to the Promise/microtask scheduler queue, not to timers or the
+ * full macrotask event loop.
+ * @example
+ * Yield to the next scheduler tick.
+ * ```ts
+ * await nextTick();
+ * ```
+ */
+const nextTick = async () => { };
+/**
+ * Returns control to the Promise/microtask scheduler every `tick`
+ * milliseconds to avoid blocking long loops.
+ * @param iters - number of loop iterations to run
+ * @param tick - maximum time slice in milliseconds
+ * @param cb - callback executed on each iteration
+ * @example
+ * Run a loop that periodically yields back to the event loop.
+ * ```ts
+ * await asyncLoop(2, 0, () => {});
+ * ```
+ */
+async function asyncLoop(iters, tick, cb) {
+    let ts = Date.now();
+    for (let i = 0; i < iters; i++) {
+        cb(i);
+        // Date.now() is not monotonic, so in case if clock goes backwards we return return control too
+        const diff = Date.now() - ts;
+        if (diff >= 0 && diff < tick)
+            continue;
+        await nextTick();
+        ts += diff;
+    }
+}
+/**
+ * Converts string to bytes using UTF8 encoding.
+ * Built-in doesn't validate input to be string: we do the check.
+ * Non-ASCII details are delegated to the platform `TextEncoder`.
+ * @param str - string to encode
+ * @returns UTF-8 encoded bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Encode a string as UTF-8 bytes.
+ * ```ts
+ * utf8ToBytes('abc'); // Uint8Array.from([97, 98, 99])
+ * ```
+ */
+function utils_utf8ToBytes(str) {
+    if (typeof str !== 'string')
+        throw new TypeError('string expected');
+    return new Uint8Array(new TextEncoder().encode(str)); // https://bugzil.la/1681809
+}
+/**
+ * Helper for KDFs: consumes Uint8Array or string.
+ * String inputs are UTF-8 encoded; byte-array inputs stay aliased to the caller buffer.
+ * @param data - user-provided KDF input
+ * @param errorTitle - label included in thrown errors
+ * @returns Byte representation of the input.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Normalize KDF input to bytes.
+ * ```ts
+ * kdfInputToBytes('password');
+ * ```
+ */
+function kdfInputToBytes(data, errorTitle = '') {
+    if (typeof data === 'string')
+        return utils_utf8ToBytes(data);
+    return hashes_utils_abytes(data, undefined, errorTitle);
+}
+/**
+ * Copies several Uint8Arrays into one.
+ * @param arrays - arrays to concatenate
+ * @returns Concatenated byte array.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Concatenate multiple byte arrays.
+ * ```ts
+ * concatBytes(new Uint8Array([1]), new Uint8Array([2]));
+ * ```
+ */
+function utils_concatBytes(...arrays) {
+    let sum = 0;
+    for (let i = 0; i < arrays.length; i++) {
+        const a = arrays[i];
+        hashes_utils_abytes(a);
+        sum += a.length;
+    }
+    const res = new Uint8Array(sum);
+    for (let i = 0, pad = 0; i < arrays.length; i++) {
+        const a = arrays[i];
+        res.set(a, pad);
+        pad += a.length;
+    }
+    return res;
+}
+/**
+ * Merges default options and passed options.
+ * @param defaults - base option object
+ * @param opts - user overrides
+ * @returns Merged option object. The merge mutates `defaults` in place.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Merge user overrides onto default options.
+ * ```ts
+ * checkOpts({ dkLen: 32 }, { asyncTick: 10 });
+ * ```
+ */
+function utils_checkOpts(defaults, opts) {
+    if (opts !== undefined && {}.toString.call(opts) !== '[object Object]')
+        throw new TypeError('options must be object or undefined');
+    const merged = Object.assign(defaults, opts);
+    return merged;
+}
+/**
+ * Creates a callable hash function from a stateful class constructor.
+ * @param hashCons - hash constructor or factory
+ * @param info - optional metadata such as DER OID
+ * @returns Frozen callable hash wrapper with `.create()`.
+ *   Wrapper construction eagerly calls `hashCons(undefined)` once to read
+ *   `outputLen` / `blockLen`, so constructor side effects happen at module
+ *   init time.
+ * @example
+ * Wrap a stateful hash constructor into a callable helper.
+ * ```ts
+ * import { createHasher } from '@noble/hashes/utils.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * const wrapped = createHasher(sha256.create, { oid: sha256.oid });
+ * wrapped(new Uint8Array([1]));
+ * ```
+ */
+function utils_createHasher(hashCons, info = {}) {
+    const hashC = (msg, opts) => hashCons(opts)
+        .update(msg)
+        .digest();
+    const tmp = hashCons(undefined);
+    hashC.outputLen = tmp.outputLen;
+    hashC.blockLen = tmp.blockLen;
+    hashC.canXOF = tmp.canXOF;
+    hashC.create = (opts) => hashCons(opts);
+    Object.assign(hashC, info);
+    return Object.freeze(hashC);
+}
+/**
+ * Cryptographically secure PRNG backed by `crypto.getRandomValues`.
+ * @param bytesLength - number of random bytes to generate
+ * @returns Random bytes.
+ * The platform `getRandomValues()` implementation still defines any
+ * single-call length cap, and this helper rejects oversize requests
+ * with a stable library `RangeError` instead of host-specific errors.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @throws If the current runtime does not provide `crypto.getRandomValues`. {@link Error}
+ * @example
+ * Generate a fresh random key or nonce.
+ * ```ts
+ * const key = randomBytes(16);
+ * ```
+ */
+function utils_randomBytes(bytesLength = 32) {
+    // Match the repo's other length-taking helpers instead of relying on Uint8Array coercion.
+    hashes_utils_anumber(bytesLength, 'bytesLength');
+    const cr = typeof globalThis === 'object' ? globalThis.crypto : null;
+    if (typeof cr?.getRandomValues !== 'function')
+        throw new Error('crypto.getRandomValues must be defined');
+    // Web Cryptography API Level 2 §10.1.1:
+    // if `byteLength > 65536`, throw `QuotaExceededError`.
+    // Keep the guard explicit so callers can see the quota in code
+    // instead of discovering it by reading the spec or host errors.
+    // This wrapper surfaces the same quota as a stable library RangeError.
+    if (bytesLength > 65536)
+        throw new RangeError(`"bytesLength" expected <= 65536, got ${bytesLength}`);
+    return cr.getRandomValues(new Uint8Array(bytesLength));
+}
+/**
+ * Creates OID metadata for NIST hashes with prefix `06 09 60 86 48 01 65 03 04 02`.
+ * @param suffix - final OID byte for the selected hash.
+ *   The helper accepts any byte even though only the documented NIST hash
+ *   suffixes are meaningful downstream.
+ * @returns Object containing the DER-encoded OID.
+ * @example
+ * Build OID metadata for a NIST hash.
+ * ```ts
+ * oidNist(0x01);
+ * ```
+ */
+const utils_oidNist = (suffix) => ({
+    // Current NIST hashAlgs suffixes used here fit in one DER subidentifier octet.
+    // Larger suffix values would need base-128 OID encoding and a different length byte.
+    oid: Uint8Array.from([0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, suffix]),
+});
+//# sourceMappingURL=utils.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/hashes/_md.js
+/**
+ * Internal Merkle-Damgard hash utils.
+ * @module
+ */
+
+/**
+ * Shared 32-bit conditional boolean primitive reused by SHA-256, SHA-1, and MD5 `F`.
+ * Returns bits from `b` when `a` is set, otherwise from `c`.
+ * The XOR form is equivalent to MD5's `F(X,Y,Z) = XY v not(X)Z` because the masked terms never
+ * set the same bit.
+ * @param a - selector word
+ * @param b - word chosen when selector bit is set
+ * @param c - word chosen when selector bit is clear
+ * @returns Mixed 32-bit word.
+ * @example
+ * Combine three words with the shared 32-bit choice primitive.
+ * ```ts
+ * Chi(0xffffffff, 0x12345678, 0x87654321);
+ * ```
+ */
+function Chi(a, b, c) {
+    return (a & b) ^ (~a & c);
+}
+/**
+ * Shared 32-bit majority primitive reused by SHA-256 and SHA-1.
+ * Returns bits shared by at least two inputs.
+ * @param a - first input word
+ * @param b - second input word
+ * @param c - third input word
+ * @returns Mixed 32-bit word.
+ * @example
+ * Combine three words with the shared 32-bit majority primitive.
+ * ```ts
+ * Maj(0xffffffff, 0x12345678, 0x87654321);
+ * ```
+ */
+function Maj(a, b, c) {
+    return (a & b) ^ (a & c) ^ (b & c);
+}
+/**
+ * Merkle-Damgard hash construction base class.
+ * Could be used to create MD5, RIPEMD, SHA1, SHA2.
+ * Accepts only byte-aligned `Uint8Array` input, even when the underlying spec describes bit
+ * strings with partial-byte tails.
+ * @param blockLen - internal block size in bytes
+ * @param outputLen - digest size in bytes
+ * @param padOffset - trailing length field size in bytes
+ * @param isLE - whether length and state words are encoded in little-endian
+ * @example
+ * Use a concrete subclass to get the shared Merkle-Damgard update/digest flow.
+ * ```ts
+ * import { _SHA1 } from '@noble/hashes/legacy.js';
+ * const hash = new _SHA1();
+ * hash.update(new Uint8Array([97, 98, 99]));
+ * hash.digest();
+ * ```
+ */
+class HashMD {
+    blockLen;
+    outputLen;
+    canXOF = false;
+    padOffset;
+    isLE;
+    // For partial updates less than block size
+    buffer;
+    view;
+    finished = false;
+    length = 0;
+    pos = 0;
+    destroyed = false;
+    constructor(blockLen, outputLen, padOffset, isLE) {
+        this.blockLen = blockLen;
+        this.outputLen = outputLen;
+        this.padOffset = padOffset;
+        this.isLE = isLE;
+        this.buffer = new Uint8Array(blockLen);
+        this.view = utils_createView(this.buffer);
+    }
+    update(data) {
+        utils_aexists(this);
+        hashes_utils_abytes(data);
+        const { view, buffer, blockLen } = this;
+        const len = data.length;
+        for (let pos = 0; pos < len;) {
+            const take = Math.min(blockLen - this.pos, len - pos);
+            // Fast path only when there is no buffered partial block: `take === blockLen` implies
+            // `this.pos === 0`, so we can process full blocks directly from the input view.
+            if (take === blockLen) {
+                const dataView = utils_createView(data);
+                for (; blockLen <= len - pos; pos += blockLen)
+                    this.process(dataView, pos);
+                continue;
+            }
+            buffer.set(data.subarray(pos, pos + take), this.pos);
+            this.pos += take;
+            pos += take;
+            if (this.pos === blockLen) {
+                this.process(view, 0);
+                this.pos = 0;
+            }
+        }
+        this.length += data.length;
+        this.roundClean();
+        return this;
+    }
+    digestInto(out) {
+        utils_aexists(this);
+        utils_aoutput(out, this);
+        this.finished = true;
+        // Padding
+        // We can avoid allocation of buffer for padding completely if it
+        // was previously not allocated here. But it won't change performance.
+        const { buffer, view, blockLen, isLE } = this;
+        let { pos } = this;
+        // append the bit '1' to the message
+        buffer[pos++] = 0b10000000;
+        utils_clean(this.buffer.subarray(pos));
+        // we have less than padOffset left in buffer, so we cannot put length in
+        // current block, need process it and pad again
+        if (this.padOffset > blockLen - pos) {
+            this.process(view, 0);
+            pos = 0;
+        }
+        // Pad until full block byte with zeros
+        for (let i = pos; i < blockLen; i++)
+            buffer[i] = 0;
+        // `padOffset` reserves the whole length field. For SHA-384/512 the high 64 bits stay zero from
+        // the padding fill above, and JS will overflow before user input can make that half non-zero.
+        // So we only need to write the low 64 bits here.
+        view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE);
+        this.process(view, 0);
+        const oview = utils_createView(out);
+        const len = this.outputLen;
+        // NOTE: we do division by 4 later, which must be fused in single op with modulo by JIT
+        if (len % 4)
+            throw new Error('_sha2: outputLen must be aligned to 32bit');
+        const outLen = len / 4;
+        const state = this.get();
+        if (outLen > state.length)
+            throw new Error('_sha2: outputLen bigger than state');
+        for (let i = 0; i < outLen; i++)
+            oview.setUint32(4 * i, state[i], isLE);
+    }
+    digest() {
+        const { buffer, outputLen } = this;
+        this.digestInto(buffer);
+        // Copy before destroy(): subclasses wipe `buffer` during cleanup, but `digest()` must return
+        // fresh bytes to the caller.
+        const res = buffer.slice(0, outputLen);
+        this.destroy();
+        return res;
+    }
+    _cloneInto(to) {
+        to ||= new this.constructor();
+        to.set(...this.get());
+        const { blockLen, buffer, length, finished, destroyed, pos } = this;
+        to.destroyed = destroyed;
+        to.finished = finished;
+        to.length = length;
+        to.pos = pos;
+        // Only partial-block bytes need copying: when `length % blockLen === 0`, `pos === 0` and
+        // later `update()` / `digestInto()` overwrite `to.buffer` from the start before reading it.
+        if (length % blockLen)
+            to.buffer.set(buffer);
+        return to;
+    }
+    clone() {
+        return this._cloneInto();
+    }
+}
+/**
+ * Initial SHA-2 state: fractional parts of square roots of first 16 primes 2..53.
+ * Check out `test/misc/sha2-gen-iv.js` for recomputation guide.
+ */
+/** Initial SHA256 state from RFC 6234 §6.1: the first 32 bits of the fractional parts of the
+ * square roots of the first eight prime numbers. Exported as a shared table; callers must treat
+ * it as read-only because constructors copy words from it by index. */
+const SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+]);
+/** Initial SHA224 state `H(0)` from RFC 6234 §6.1. Exported as a shared table; callers must
+ * treat it as read-only because constructors copy words from it by index. */
+const SHA224_IV = /* @__PURE__ */ Uint32Array.from([
+    0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4,
+]);
+/** Initial SHA384 state from RFC 6234 §6.3: eight RFC 64-bit `H(0)` words stored as sixteen
+ * big-endian 32-bit halves. Derived from the fractional parts of the square roots of the ninth
+ * through sixteenth prime numbers. Exported as a shared table; callers must treat it as read-only
+ * because constructors copy halves from it by index. */
+const SHA384_IV = /* @__PURE__ */ Uint32Array.from([
+    0xcbbb9d5d, 0xc1059ed8, 0x629a292a, 0x367cd507, 0x9159015a, 0x3070dd17, 0x152fecd8, 0xf70e5939,
+    0x67332667, 0xffc00b31, 0x8eb44a87, 0x68581511, 0xdb0c2e0d, 0x64f98fa7, 0x47b5481d, 0xbefa4fa4,
+]);
+/** Initial SHA512 state from RFC 6234 §6.3: eight RFC 64-bit `H(0)` words stored as sixteen
+ * big-endian 32-bit halves. Derived from the fractional parts of the square roots of the first
+ * eight prime numbers. Exported as a shared table; callers must treat it as read-only because
+ * constructors copy halves from it by index. */
+const SHA512_IV = /* @__PURE__ */ Uint32Array.from([
+    0x6a09e667, 0xf3bcc908, 0xbb67ae85, 0x84caa73b, 0x3c6ef372, 0xfe94f82b, 0xa54ff53a, 0x5f1d36f1,
+    0x510e527f, 0xade682d1, 0x9b05688c, 0x2b3e6c1f, 0x1f83d9ab, 0xfb41bd6b, 0x5be0cd19, 0x137e2179,
+]);
+//# sourceMappingURL=_md.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/hashes/_u64.js
+const U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
+const _32n = /* @__PURE__ */ BigInt(32);
+// Split bigint into two 32-bit halves. With `le=true`, returned fields become `{ h: low, l: high
+// }` to match little-endian word order rather than the property names.
+function fromBig(n, le = false) {
+    if (le)
+        return { h: Number(n & U32_MASK64), l: Number((n >> _32n) & U32_MASK64) };
+    return { h: Number((n >> _32n) & U32_MASK64) | 0, l: Number(n & U32_MASK64) | 0 };
+}
+// Split bigint list into `[highWords, lowWords]` when `le=false`; with `le=true`, the first array
+// holds the low halves because `fromBig(...)` swaps the semantic meaning of `h` and `l`.
+function split(lst, le = false) {
+    const len = lst.length;
+    let Ah = new Uint32Array(len);
+    let Al = new Uint32Array(len);
+    for (let i = 0; i < len; i++) {
+        const { h, l } = fromBig(lst[i], le);
+        [Ah[i], Al[i]] = [h, l];
+    }
+    return [Ah, Al];
+}
+// Combine explicit `(high, low)` 32-bit halves into a bigint; `>>> 0` normalizes signed JS
+// bitwise results back to uint32 first, and little-endian callers must swap.
+const toBig = (h, l) => (BigInt(h >>> 0) << _32n) | BigInt(l >>> 0);
+// High 32-bit half of a 64-bit logical right shift for `s` in `0..31`.
+const shrSH = (h, _l, s) => h >>> s;
+// Low 32-bit half of a 64-bit logical right shift, valid for `s` in `1..31`.
+const shrSL = (h, l, s) => (h << (32 - s)) | (l >>> s);
+// High 32-bit half of a 64-bit right rotate, valid for `s` in `1..31`.
+const rotrSH = (h, l, s) => (h >>> s) | (l << (32 - s));
+// Low 32-bit half of a 64-bit right rotate, valid for `s` in `1..31`.
+const rotrSL = (h, l, s) => (h << (32 - s)) | (l >>> s);
+// High 32-bit half of a 64-bit right rotate, valid for `s` in `33..63`; `32` uses `rotr32*`.
+const rotrBH = (h, l, s) => (h << (64 - s)) | (l >>> (s - 32));
+// Low 32-bit half of a 64-bit right rotate, valid for `s` in `33..63`; `32` uses `rotr32*`.
+const rotrBL = (h, l, s) => (h >>> (s - 32)) | (l << (64 - s));
+// High 32-bit half of a 64-bit right rotate for `s === 32`; this is just the swapped low half.
+const rotr32H = (_h, l) => l;
+// Low 32-bit half of a 64-bit right rotate for `s === 32`; this is just the swapped high half.
+const rotr32L = (h, _l) => h;
+// High 32-bit half of a 64-bit left rotate, valid for `s` in `1..31`.
+const rotlSH = (h, l, s) => (h << s) | (l >>> (32 - s));
+// Low 32-bit half of a 64-bit left rotate, valid for `s` in `1..31`.
+const rotlSL = (h, l, s) => (l << s) | (h >>> (32 - s));
+// High 32-bit half of a 64-bit left rotate, valid for `s` in `33..63`; `32` uses `rotr32*`.
+const rotlBH = (h, l, s) => (l << (s - 32)) | (h >>> (64 - s));
+// Low 32-bit half of a 64-bit left rotate, valid for `s` in `33..63`; `32` uses `rotr32*`.
+const rotlBL = (h, l, s) => (h << (s - 32)) | (l >>> (64 - s));
+// Add two split 64-bit words and return the split `{ h, l }` sum.
+// JS uses 32-bit signed integers for bitwise operations, so we cannot simply shift the carry out
+// of the low sum and instead use division.
+function add(Ah, Al, Bh, Bl) {
+    const l = (Al >>> 0) + (Bl >>> 0);
+    return { h: (Ah + Bh + ((l / 2 ** 32) | 0)) | 0, l: l | 0 };
+}
+// Addition with more than 2 elements
+// Unmasked low-word accumulator for 3-way addition; pass the raw result into `add3H(...)`.
+const add3L = (Al, Bl, Cl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0);
+// High-word finalize step for 3-way addition; `low` must be the untruncated output of `add3L(...)`.
+const add3H = (low, Ah, Bh, Ch) => (Ah + Bh + Ch + ((low / 2 ** 32) | 0)) | 0;
+// Unmasked low-word accumulator for 4-way addition; pass the raw result into `add4H(...)`.
+const add4L = (Al, Bl, Cl, Dl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0);
+// High-word finalize step for 4-way addition; `low` must be the untruncated output of `add4L(...)`.
+const add4H = (low, Ah, Bh, Ch, Dh) => (Ah + Bh + Ch + Dh + ((low / 2 ** 32) | 0)) | 0;
+// Unmasked low-word accumulator for 5-way addition; pass the raw result into `add5H(...)`.
+const add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
+// High-word finalize step for 5-way addition; `low` must be the untruncated output of `add5L(...)`.
+const add5H = (low, Ah, Bh, Ch, Dh, Eh) => (Ah + Bh + Ch + Dh + Eh + ((low / 2 ** 32) | 0)) | 0;
+// prettier-ignore
+
+// Canonical grouped namespace for callers that prefer one object.
+// Named exports stay for direct imports.
+// prettier-ignore
+const u64 = {
+    fromBig, split, toBig,
+    shrSH, shrSL,
+    rotrSH, rotrSL, rotrBH, rotrBL,
+    rotr32H, rotr32L,
+    rotlSH, rotlSL, rotlBH, rotlBL,
+    add, add3L, add3H, add4L, add4H, add5H, add5L,
+};
+// Default export mirrors named `u64` for compatibility with object-style imports.
+/* harmony default export */ const _u64 = ((/* unused pure expression or super */ null && (u64)));
+//# sourceMappingURL=_u64.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/hashes/sha2.js
+/**
+ * SHA2 hash function. A.k.a. sha256, sha384, sha512, sha512_224, sha512_256.
+ * SHA256 is the fastest hash implementable in JS, even faster than Blake3.
+ * Check out {@link https://www.rfc-editor.org/rfc/rfc4634 | RFC 4634} and
+ * {@link https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf | FIPS 180-4}.
+ * @module
+ */
+
+
+
+/**
+ * SHA-224 / SHA-256 round constants from RFC 6234 §5.1: the first 32 bits
+ * of the cube roots of the first 64 primes (2..311).
+ */
+// prettier-ignore
+const SHA256_K = /* @__PURE__ */ Uint32Array.from([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]);
+/** Reusable SHA-224 / SHA-256 message schedule buffer `W_t` from RFC 6234 §6.2 step 1. */
+const SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+/** Internal SHA-224 / SHA-256 compression engine from RFC 6234 §6.2. */
+class SHA2_32B extends HashMD {
+    constructor(outputLen) {
+        super(64, outputLen, 8, false);
+    }
+    get() {
+        const { A, B, C, D, E, F, G, H } = this;
+        return [A, B, C, D, E, F, G, H];
+    }
+    // prettier-ignore
+    set(A, B, C, D, E, F, G, H) {
+        this.A = A | 0;
+        this.B = B | 0;
+        this.C = C | 0;
+        this.D = D | 0;
+        this.E = E | 0;
+        this.F = F | 0;
+        this.G = G | 0;
+        this.H = H | 0;
+    }
+    process(view, offset) {
+        // Extend the first 16 words into the remaining 48 words w[16..63] of the message schedule array
+        for (let i = 0; i < 16; i++, offset += 4)
+            SHA256_W[i] = view.getUint32(offset, false);
+        for (let i = 16; i < 64; i++) {
+            const W15 = SHA256_W[i - 15];
+            const W2 = SHA256_W[i - 2];
+            const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ (W15 >>> 3);
+            const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ (W2 >>> 10);
+            SHA256_W[i] = (s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16]) | 0;
+        }
+        // Compression function main loop, 64 rounds
+        let { A, B, C, D, E, F, G, H } = this;
+        for (let i = 0; i < 64; i++) {
+            const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
+            const T1 = (H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i]) | 0;
+            const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
+            const T2 = (sigma0 + Maj(A, B, C)) | 0;
+            H = G;
+            G = F;
+            F = E;
+            E = (D + T1) | 0;
+            D = C;
+            C = B;
+            B = A;
+            A = (T1 + T2) | 0;
+        }
+        // Add the compressed chunk to the current hash value
+        A = (A + this.A) | 0;
+        B = (B + this.B) | 0;
+        C = (C + this.C) | 0;
+        D = (D + this.D) | 0;
+        E = (E + this.E) | 0;
+        F = (F + this.F) | 0;
+        G = (G + this.G) | 0;
+        H = (H + this.H) | 0;
+        this.set(A, B, C, D, E, F, G, H);
+    }
+    roundClean() {
+        utils_clean(SHA256_W);
+    }
+    destroy() {
+        // HashMD callers route post-destroy usability through `destroyed`; zeroizing alone still leaves
+        // update()/digest() callable on reused instances.
+        this.destroyed = true;
+        this.set(0, 0, 0, 0, 0, 0, 0, 0);
+        utils_clean(this.buffer);
+    }
+}
+/** Internal SHA-256 hash class grounded in RFC 6234 §6.2. */
+class _SHA256 extends SHA2_32B {
+    // We cannot use array here since array allows indexing by variable
+    // which means optimizer/compiler cannot use registers.
+    A = SHA256_IV[0] | 0;
+    B = SHA256_IV[1] | 0;
+    C = SHA256_IV[2] | 0;
+    D = SHA256_IV[3] | 0;
+    E = SHA256_IV[4] | 0;
+    F = SHA256_IV[5] | 0;
+    G = SHA256_IV[6] | 0;
+    H = SHA256_IV[7] | 0;
+    constructor() {
+        super(32);
+    }
+}
+/** Internal SHA-224 hash class grounded in RFC 6234 §6.2 and §8.5. */
+class _SHA224 extends SHA2_32B {
+    A = SHA224_IV[0] | 0;
+    B = SHA224_IV[1] | 0;
+    C = SHA224_IV[2] | 0;
+    D = SHA224_IV[3] | 0;
+    E = SHA224_IV[4] | 0;
+    F = SHA224_IV[5] | 0;
+    G = SHA224_IV[6] | 0;
+    H = SHA224_IV[7] | 0;
+    constructor() {
+        super(28);
+    }
+}
+// SHA2-512 is slower than sha256 in js because u64 operations are slow.
+// SHA-384 / SHA-512 round constants from RFC 6234 §5.2:
+// 80 full 64-bit words split into high/low halves.
+// prettier-ignore
+const K512 = /* @__PURE__ */ (() => split([
+    '0x428a2f98d728ae22', '0x7137449123ef65cd', '0xb5c0fbcfec4d3b2f', '0xe9b5dba58189dbbc',
+    '0x3956c25bf348b538', '0x59f111f1b605d019', '0x923f82a4af194f9b', '0xab1c5ed5da6d8118',
+    '0xd807aa98a3030242', '0x12835b0145706fbe', '0x243185be4ee4b28c', '0x550c7dc3d5ffb4e2',
+    '0x72be5d74f27b896f', '0x80deb1fe3b1696b1', '0x9bdc06a725c71235', '0xc19bf174cf692694',
+    '0xe49b69c19ef14ad2', '0xefbe4786384f25e3', '0x0fc19dc68b8cd5b5', '0x240ca1cc77ac9c65',
+    '0x2de92c6f592b0275', '0x4a7484aa6ea6e483', '0x5cb0a9dcbd41fbd4', '0x76f988da831153b5',
+    '0x983e5152ee66dfab', '0xa831c66d2db43210', '0xb00327c898fb213f', '0xbf597fc7beef0ee4',
+    '0xc6e00bf33da88fc2', '0xd5a79147930aa725', '0x06ca6351e003826f', '0x142929670a0e6e70',
+    '0x27b70a8546d22ffc', '0x2e1b21385c26c926', '0x4d2c6dfc5ac42aed', '0x53380d139d95b3df',
+    '0x650a73548baf63de', '0x766a0abb3c77b2a8', '0x81c2c92e47edaee6', '0x92722c851482353b',
+    '0xa2bfe8a14cf10364', '0xa81a664bbc423001', '0xc24b8b70d0f89791', '0xc76c51a30654be30',
+    '0xd192e819d6ef5218', '0xd69906245565a910', '0xf40e35855771202a', '0x106aa07032bbd1b8',
+    '0x19a4c116b8d2d0c8', '0x1e376c085141ab53', '0x2748774cdf8eeb99', '0x34b0bcb5e19b48a8',
+    '0x391c0cb3c5c95a63', '0x4ed8aa4ae3418acb', '0x5b9cca4f7763e373', '0x682e6ff3d6b2b8a3',
+    '0x748f82ee5defb2fc', '0x78a5636f43172f60', '0x84c87814a1f0ab72', '0x8cc702081a6439ec',
+    '0x90befffa23631e28', '0xa4506cebde82bde9', '0xbef9a3f7b2c67915', '0xc67178f2e372532b',
+    '0xca273eceea26619c', '0xd186b8c721c0c207', '0xeada7dd6cde0eb1e', '0xf57d4f7fee6ed178',
+    '0x06f067aa72176fba', '0x0a637dc5a2c898a6', '0x113f9804bef90dae', '0x1b710b35131c471b',
+    '0x28db77f523047d84', '0x32caab7b40c72493', '0x3c9ebe0a15c9bebc', '0x431d67c49c100d4c',
+    '0x4cc5d4becb3e42b6', '0x597f299cfc657e2a', '0x5fcb6fab3ad6faec', '0x6c44198c4a475817'
+].map(n => BigInt(n))))();
+const SHA512_Kh = /* @__PURE__ */ (() => K512[0])();
+const SHA512_Kl = /* @__PURE__ */ (() => K512[1])();
+// Reusable high-half schedule buffer for the RFC 6234 §6.4 64-bit `W_t` words.
+const SHA512_W_H = /* @__PURE__ */ new Uint32Array(80);
+// Reusable low-half schedule buffer for the RFC 6234 §6.4 64-bit `W_t` words.
+const SHA512_W_L = /* @__PURE__ */ new Uint32Array(80);
+/** Internal SHA-384 / SHA-512 compression engine from RFC 6234 §6.4. */
+class SHA2_64B extends HashMD {
+    constructor(outputLen) {
+        super(128, outputLen, 16, false);
+    }
+    // prettier-ignore
+    get() {
+        const { Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl } = this;
+        return [Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl];
+    }
+    // prettier-ignore
+    set(Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl) {
+        this.Ah = Ah | 0;
+        this.Al = Al | 0;
+        this.Bh = Bh | 0;
+        this.Bl = Bl | 0;
+        this.Ch = Ch | 0;
+        this.Cl = Cl | 0;
+        this.Dh = Dh | 0;
+        this.Dl = Dl | 0;
+        this.Eh = Eh | 0;
+        this.El = El | 0;
+        this.Fh = Fh | 0;
+        this.Fl = Fl | 0;
+        this.Gh = Gh | 0;
+        this.Gl = Gl | 0;
+        this.Hh = Hh | 0;
+        this.Hl = Hl | 0;
+    }
+    process(view, offset) {
+        // Extend the first 16 words into the remaining 64 words w[16..79] of the message schedule array
+        for (let i = 0; i < 16; i++, offset += 4) {
+            SHA512_W_H[i] = view.getUint32(offset);
+            SHA512_W_L[i] = view.getUint32((offset += 4));
+        }
+        for (let i = 16; i < 80; i++) {
+            // s0 := (w[i-15] rightrotate 1) xor (w[i-15] rightrotate 8) xor (w[i-15] rightshift 7)
+            const W15h = SHA512_W_H[i - 15] | 0;
+            const W15l = SHA512_W_L[i - 15] | 0;
+            const s0h = rotrSH(W15h, W15l, 1) ^ rotrSH(W15h, W15l, 8) ^ shrSH(W15h, W15l, 7);
+            const s0l = rotrSL(W15h, W15l, 1) ^ rotrSL(W15h, W15l, 8) ^ shrSL(W15h, W15l, 7);
+            // s1 := (w[i-2] rightrotate 19) xor (w[i-2] rightrotate 61) xor (w[i-2] rightshift 6)
+            const W2h = SHA512_W_H[i - 2] | 0;
+            const W2l = SHA512_W_L[i - 2] | 0;
+            const s1h = rotrSH(W2h, W2l, 19) ^ rotrBH(W2h, W2l, 61) ^ shrSH(W2h, W2l, 6);
+            const s1l = rotrSL(W2h, W2l, 19) ^ rotrBL(W2h, W2l, 61) ^ shrSL(W2h, W2l, 6);
+            // SHA512_W[i] = s0 + s1 + SHA512_W[i - 7] + SHA512_W[i - 16];
+            const SUMl = add4L(s0l, s1l, SHA512_W_L[i - 7], SHA512_W_L[i - 16]);
+            const SUMh = add4H(SUMl, s0h, s1h, SHA512_W_H[i - 7], SHA512_W_H[i - 16]);
+            SHA512_W_H[i] = SUMh | 0;
+            SHA512_W_L[i] = SUMl | 0;
+        }
+        let { Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl } = this;
+        // Compression function main loop, 80 rounds
+        for (let i = 0; i < 80; i++) {
+            // S1 := (e rightrotate 14) xor (e rightrotate 18) xor (e rightrotate 41)
+            const sigma1h = rotrSH(Eh, El, 14) ^ rotrSH(Eh, El, 18) ^ rotrBH(Eh, El, 41);
+            const sigma1l = rotrSL(Eh, El, 14) ^ rotrSL(Eh, El, 18) ^ rotrBL(Eh, El, 41);
+            //const T1 = (H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i]) | 0;
+            const CHIh = (Eh & Fh) ^ (~Eh & Gh);
+            const CHIl = (El & Fl) ^ (~El & Gl);
+            // T1 = H + sigma1 + Chi(E, F, G) + SHA512_K[i] + SHA512_W[i]
+            // prettier-ignore
+            const T1ll = add5L(Hl, sigma1l, CHIl, SHA512_Kl[i], SHA512_W_L[i]);
+            const T1h = add5H(T1ll, Hh, sigma1h, CHIh, SHA512_Kh[i], SHA512_W_H[i]);
+            const T1l = T1ll | 0;
+            // S0 := (a rightrotate 28) xor (a rightrotate 34) xor (a rightrotate 39)
+            const sigma0h = rotrSH(Ah, Al, 28) ^ rotrBH(Ah, Al, 34) ^ rotrBH(Ah, Al, 39);
+            const sigma0l = rotrSL(Ah, Al, 28) ^ rotrBL(Ah, Al, 34) ^ rotrBL(Ah, Al, 39);
+            const MAJh = (Ah & Bh) ^ (Ah & Ch) ^ (Bh & Ch);
+            const MAJl = (Al & Bl) ^ (Al & Cl) ^ (Bl & Cl);
+            Hh = Gh | 0;
+            Hl = Gl | 0;
+            Gh = Fh | 0;
+            Gl = Fl | 0;
+            Fh = Eh | 0;
+            Fl = El | 0;
+            ({ h: Eh, l: El } = add(Dh | 0, Dl | 0, T1h | 0, T1l | 0));
+            Dh = Ch | 0;
+            Dl = Cl | 0;
+            Ch = Bh | 0;
+            Cl = Bl | 0;
+            Bh = Ah | 0;
+            Bl = Al | 0;
+            const All = add3L(T1l, sigma0l, MAJl);
+            Ah = add3H(All, T1h, sigma0h, MAJh);
+            Al = All | 0;
+        }
+        // Add the compressed chunk to the current hash value
+        ({ h: Ah, l: Al } = add(this.Ah | 0, this.Al | 0, Ah | 0, Al | 0));
+        ({ h: Bh, l: Bl } = add(this.Bh | 0, this.Bl | 0, Bh | 0, Bl | 0));
+        ({ h: Ch, l: Cl } = add(this.Ch | 0, this.Cl | 0, Ch | 0, Cl | 0));
+        ({ h: Dh, l: Dl } = add(this.Dh | 0, this.Dl | 0, Dh | 0, Dl | 0));
+        ({ h: Eh, l: El } = add(this.Eh | 0, this.El | 0, Eh | 0, El | 0));
+        ({ h: Fh, l: Fl } = add(this.Fh | 0, this.Fl | 0, Fh | 0, Fl | 0));
+        ({ h: Gh, l: Gl } = add(this.Gh | 0, this.Gl | 0, Gh | 0, Gl | 0));
+        ({ h: Hh, l: Hl } = add(this.Hh | 0, this.Hl | 0, Hh | 0, Hl | 0));
+        this.set(Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl);
+    }
+    roundClean() {
+        utils_clean(SHA512_W_H, SHA512_W_L);
+    }
+    destroy() {
+        // HashMD callers route post-destroy usability through `destroyed`; zeroizing alone still leaves
+        // update()/digest() callable on reused instances.
+        this.destroyed = true;
+        utils_clean(this.buffer);
+        this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+}
+/** Internal SHA-512 hash class grounded in RFC 6234 §6.3 and §6.4. */
+class _SHA512 extends SHA2_64B {
+    Ah = SHA512_IV[0] | 0;
+    Al = SHA512_IV[1] | 0;
+    Bh = SHA512_IV[2] | 0;
+    Bl = SHA512_IV[3] | 0;
+    Ch = SHA512_IV[4] | 0;
+    Cl = SHA512_IV[5] | 0;
+    Dh = SHA512_IV[6] | 0;
+    Dl = SHA512_IV[7] | 0;
+    Eh = SHA512_IV[8] | 0;
+    El = SHA512_IV[9] | 0;
+    Fh = SHA512_IV[10] | 0;
+    Fl = SHA512_IV[11] | 0;
+    Gh = SHA512_IV[12] | 0;
+    Gl = SHA512_IV[13] | 0;
+    Hh = SHA512_IV[14] | 0;
+    Hl = SHA512_IV[15] | 0;
+    constructor() {
+        super(64);
+    }
+}
+/** Internal SHA-384 hash class grounded in RFC 6234 §6.3 and §6.4. */
+class _SHA384 extends SHA2_64B {
+    Ah = SHA384_IV[0] | 0;
+    Al = SHA384_IV[1] | 0;
+    Bh = SHA384_IV[2] | 0;
+    Bl = SHA384_IV[3] | 0;
+    Ch = SHA384_IV[4] | 0;
+    Cl = SHA384_IV[5] | 0;
+    Dh = SHA384_IV[6] | 0;
+    Dl = SHA384_IV[7] | 0;
+    Eh = SHA384_IV[8] | 0;
+    El = SHA384_IV[9] | 0;
+    Fh = SHA384_IV[10] | 0;
+    Fl = SHA384_IV[11] | 0;
+    Gh = SHA384_IV[12] | 0;
+    Gl = SHA384_IV[13] | 0;
+    Hh = SHA384_IV[14] | 0;
+    Hl = SHA384_IV[15] | 0;
+    constructor() {
+        super(48);
+    }
+}
+/**
+ * Truncated SHA512/256 and SHA512/224.
+ * SHA512_IV is XORed with 0xa5a5a5a5a5a5a5a5, then used as "intermediary" IV of SHA512/t.
+ * Then t hashes string to produce result IV.
+ * See the repo-side derivation recipe in `test/misc/sha2-gen-iv.js`.
+ * These IV literals are checked against that script rather than a dedicated
+ * local RFC section.
+ */
+/** SHA-512/224 IV derived by the SHA-512/t recipe in `test/misc/sha2-gen-iv.js` and
+ * stored as sixteen big-endian 32-bit halves. */
+const T224_IV = /* @__PURE__ */ Uint32Array.from([
+    0x8c3d37c8, 0x19544da2, 0x73e19966, 0x89dcd4d6, 0x1dfab7ae, 0x32ff9c82, 0x679dd514, 0x582f9fcf,
+    0x0f6d2b69, 0x7bd44da8, 0x77e36f73, 0x04c48942, 0x3f9d85a8, 0x6a1d36c8, 0x1112e6ad, 0x91d692a1,
+]);
+/** SHA-512/256 IV derived by the SHA-512/t recipe in `test/misc/sha2-gen-iv.js` and
+ * stored as sixteen big-endian 32-bit halves. */
+const T256_IV = /* @__PURE__ */ Uint32Array.from([
+    0x22312194, 0xfc2bf72c, 0x9f555fa3, 0xc84c64c2, 0x2393b86b, 0x6f53b151, 0x96387719, 0x5940eabd,
+    0x96283ee2, 0xa88effe3, 0xbe5e1e25, 0x53863992, 0x2b0199fc, 0x2c85b8aa, 0x0eb72ddc, 0x81c52ca2,
+]);
+/** Internal SHA-512/224 hash class using the derived `T224_IV` and the shared
+ * RFC 6234 §6.4 compression engine. */
+class _SHA512_224 extends SHA2_64B {
+    Ah = T224_IV[0] | 0;
+    Al = T224_IV[1] | 0;
+    Bh = T224_IV[2] | 0;
+    Bl = T224_IV[3] | 0;
+    Ch = T224_IV[4] | 0;
+    Cl = T224_IV[5] | 0;
+    Dh = T224_IV[6] | 0;
+    Dl = T224_IV[7] | 0;
+    Eh = T224_IV[8] | 0;
+    El = T224_IV[9] | 0;
+    Fh = T224_IV[10] | 0;
+    Fl = T224_IV[11] | 0;
+    Gh = T224_IV[12] | 0;
+    Gl = T224_IV[13] | 0;
+    Hh = T224_IV[14] | 0;
+    Hl = T224_IV[15] | 0;
+    constructor() {
+        super(28);
+    }
+}
+/** Internal SHA-512/256 hash class using the derived `T256_IV` and the shared
+ * RFC 6234 §6.4 compression engine. */
+class _SHA512_256 extends SHA2_64B {
+    Ah = T256_IV[0] | 0;
+    Al = T256_IV[1] | 0;
+    Bh = T256_IV[2] | 0;
+    Bl = T256_IV[3] | 0;
+    Ch = T256_IV[4] | 0;
+    Cl = T256_IV[5] | 0;
+    Dh = T256_IV[6] | 0;
+    Dl = T256_IV[7] | 0;
+    Eh = T256_IV[8] | 0;
+    El = T256_IV[9] | 0;
+    Fh = T256_IV[10] | 0;
+    Fl = T256_IV[11] | 0;
+    Gh = T256_IV[12] | 0;
+    Gl = T256_IV[13] | 0;
+    Hh = T256_IV[14] | 0;
+    Hl = T256_IV[15] | 0;
+    constructor() {
+        super(32);
+    }
+}
+/**
+ * SHA2-256 hash function from RFC 4634. In JS it's the fastest: even faster than Blake3. Some info:
+ *
+ * - Trying 2^128 hashes would get 50% chance of collision, using birthday attack.
+ * - BTC network is doing 2^70 hashes/sec (2^95 hashes/year) as per 2025.
+ * - Each sha256 hash is executing 2^18 bit operations.
+ * - Good 2024 ASICs can do 200Th/sec with 3500 watts of power, corresponding to 2^36 hashes/joule.
+ * @param msg - message bytes to hash
+ * @returns Digest bytes.
+ * @example
+ * Hash a message with SHA2-256.
+ * ```ts
+ * sha256(new Uint8Array([97, 98, 99]));
+ * ```
+ */
+const sha256 = /* @__PURE__ */ utils_createHasher(() => new _SHA256(),
+/* @__PURE__ */ utils_oidNist(0x01));
+/**
+ * SHA2-224 hash function from RFC 4634.
+ * @param msg - message bytes to hash
+ * @returns Digest bytes.
+ * @example
+ * Hash a message with SHA2-224.
+ * ```ts
+ * sha224(new Uint8Array([97, 98, 99]));
+ * ```
+ */
+const sha224 = /* @__PURE__ */ (/* unused pure expression or super */ null && (createHasher(() => new _SHA224(),
+/* @__PURE__ */ oidNist(0x04))));
+/**
+ * SHA2-512 hash function from RFC 4634.
+ * @param msg - message bytes to hash
+ * @returns Digest bytes.
+ * @example
+ * Hash a message with SHA2-512.
+ * ```ts
+ * sha512(new Uint8Array([97, 98, 99]));
+ * ```
+ */
+const sha2_sha512 = /* @__PURE__ */ utils_createHasher(() => new _SHA512(),
+/* @__PURE__ */ utils_oidNist(0x03));
+/**
+ * SHA2-384 hash function from RFC 4634.
+ * @param msg - message bytes to hash
+ * @returns Digest bytes.
+ * @example
+ * Hash a message with SHA2-384.
+ * ```ts
+ * sha384(new Uint8Array([97, 98, 99]));
+ * ```
+ */
+const sha384 = /* @__PURE__ */ (/* unused pure expression or super */ null && (createHasher(() => new _SHA384(),
+/* @__PURE__ */ oidNist(0x02))));
+/**
+ * SHA2-512/256 "truncated" hash function, with improved resistance to length extension attacks.
+ * See the paper on {@link https://eprint.iacr.org/2010/548.pdf | truncated SHA512}.
+ * @param msg - message bytes to hash
+ * @returns Digest bytes.
+ * @example
+ * Hash a message with SHA2-512/256.
+ * ```ts
+ * sha512_256(new Uint8Array([97, 98, 99]));
+ * ```
+ */
+const sha512_256 = /* @__PURE__ */ (/* unused pure expression or super */ null && (createHasher(() => new _SHA512_256(),
+/* @__PURE__ */ oidNist(0x06))));
+/**
+ * SHA2-512/224 "truncated" hash function, with improved resistance to length extension attacks.
+ * See the paper on {@link https://eprint.iacr.org/2010/548.pdf | truncated SHA512}.
+ * @param msg - message bytes to hash
+ * @returns Digest bytes.
+ * @example
+ * Hash a message with SHA2-512/224.
+ * ```ts
+ * sha512_224(new Uint8Array([97, 98, 99]));
+ * ```
+ */
+const sha512_224 = /* @__PURE__ */ (/* unused pure expression or super */ null && (createHasher(() => new _SHA512_224(),
+/* @__PURE__ */ oidNist(0x05))));
+//# sourceMappingURL=sha2.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/curves/utils.js
+/**
+ * Hex, bytes and number utilities.
+ * @module
+ */
+/*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+
+/**
+ * Validates that a value is a byte array.
+ * @param value - Value to validate.
+ * @param length - Optional exact byte length.
+ * @param title - Optional field name.
+ * @returns Original byte array.
+ * @example
+ * Reject non-byte input before passing data into curve code.
+ *
+ * ```ts
+ * abytes(new Uint8Array(1));
+ * ```
+ */
+const curves_utils_abytes = (value, length, title) => hashes_utils_abytes(value, length, title);
+/**
+ * Validates that a value is a non-negative safe integer.
+ * @param n - Value to validate.
+ * @param title - Optional field name.
+ * @example
+ * Validate a numeric length before allocating buffers.
+ *
+ * ```ts
+ * anumber(1);
+ * ```
+ */
+const curves_utils_anumber = hashes_utils_anumber;
+/**
+ * Encodes bytes as lowercase hex.
+ * @param bytes - Bytes to encode.
+ * @returns Lowercase hex string.
+ * @example
+ * Serialize bytes as hex for logging or fixtures.
+ *
+ * ```ts
+ * bytesToHex(Uint8Array.of(1, 2, 3));
+ * ```
+ */
+const curves_utils_bytesToHex = utils_bytesToHex;
+/**
+ * Concatenates byte arrays.
+ * @param arrays - Byte arrays to join.
+ * @returns Concatenated bytes.
+ * @example
+ * Join domain-separated chunks into one buffer.
+ *
+ * ```ts
+ * concatBytes(Uint8Array.of(1), Uint8Array.of(2));
+ * ```
+ */
+const curves_utils_concatBytes = (...arrays) => utils_concatBytes(...arrays);
+/**
+ * Decodes lowercase or uppercase hex into bytes.
+ * @param hex - Hex string to decode.
+ * @returns Decoded bytes.
+ * @example
+ * Parse fixture hex into bytes before hashing.
+ *
+ * ```ts
+ * hexToBytes('0102');
+ * ```
+ */
+const curves_utils_hexToBytes = (hex) => utils_hexToBytes(hex);
+/**
+ * Checks whether a value is a Uint8Array.
+ * @param a - Value to inspect.
+ * @returns `true` when `a` is a Uint8Array.
+ * @example
+ * Branch on byte input before decoding it.
+ *
+ * ```ts
+ * isBytes(new Uint8Array(1));
+ * ```
+ */
+const curves_utils_isBytes = hashes_utils_isBytes;
+/**
+ * Reads random bytes from the platform CSPRNG.
+ * @param bytesLength - Number of random bytes to read.
+ * @returns Fresh random bytes.
+ * @example
+ * Generate a random seed for a keypair.
+ *
+ * ```ts
+ * randomBytes(2);
+ * ```
+ */
+const curves_utils_randomBytes = (bytesLength) => utils_randomBytes(bytesLength);
+const _0n = /* @__PURE__ */ BigInt(0);
+const _1n = /* @__PURE__ */ BigInt(1);
+/**
+ * Validates that a flag is boolean.
+ * @param value - Value to validate.
+ * @param title - Optional field name.
+ * @returns Original value.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Reject non-boolean option flags early.
+ *
+ * ```ts
+ * abool(true);
+ * ```
+ */
+function utils_abool(value, title = '') {
+    if (typeof value !== 'boolean') {
+        const prefix = title && `"${title}" `;
+        throw new TypeError(prefix + 'expected boolean, got type=' + typeof value);
+    }
+    return value;
+}
+/**
+ * Validates that a value is a non-negative bigint or safe integer.
+ * @param n - Value to validate.
+ * @returns The same validated value.
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Validate one integer-like value before serializing it.
+ *
+ * ```ts
+ * abignumber(1n);
+ * ```
+ */
+function abignumber(n) {
+    if (typeof n === 'bigint') {
+        if (!isPosBig(n))
+            throw new RangeError('positive bigint expected, got ' + n);
+    }
+    else
+        curves_utils_anumber(n);
+    return n;
+}
+/**
+ * Validates that a value is a safe integer.
+ * @param value - Integer to validate.
+ * @param title - Optional field name.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Validate a window size before scalar arithmetic uses it.
+ *
+ * ```ts
+ * asafenumber(1);
+ * ```
+ */
+function utils_asafenumber(value, title = '') {
+    if (typeof value !== 'number') {
+        const prefix = title && `"${title}" `;
+        throw new TypeError(prefix + 'expected number, got type=' + typeof value);
+    }
+    if (!Number.isSafeInteger(value)) {
+        const prefix = title && `"${title}" `;
+        throw new RangeError(prefix + 'expected safe integer, got ' + value);
+    }
+}
+/**
+ * Encodes a bigint into even-length big-endian hex.
+ * The historical "unpadded" name only means "no fixed-width field padding"; odd-length hex still
+ * gets one leading zero nibble so the result always represents whole bytes.
+ * @param num - Number to encode.
+ * @returns Big-endian hex string.
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Encode a scalar into hex without a `0x` prefix.
+ *
+ * ```ts
+ * numberToHexUnpadded(255n);
+ * ```
+ */
+function numberToHexUnpadded(num) {
+    const hex = abignumber(num).toString(16);
+    return hex.length & 1 ? '0' + hex : hex;
+}
+/**
+ * Parses a big-endian hex string into bigint.
+ * Accepts odd-length hex through the native `BigInt('0x' + hex)` parser and currently surfaces the
+ * same native `SyntaxError` for malformed hex instead of wrapping it in a library-specific error.
+ * @param hex - Hex string without `0x`.
+ * @returns Parsed bigint value.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Parse a scalar from fixture hex.
+ *
+ * ```ts
+ * hexToNumber('ff');
+ * ```
+ */
+function utils_hexToNumber(hex) {
+    if (typeof hex !== 'string')
+        throw new TypeError('hex string expected, got ' + typeof hex);
+    return hex === '' ? _0n : BigInt('0x' + hex); // Big Endian
+}
+// BE: Big Endian, LE: Little Endian
+/**
+ * Parses big-endian bytes into bigint.
+ * @param bytes - Bytes in big-endian order.
+ * @returns Parsed bigint value.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Read a scalar encoded in network byte order.
+ *
+ * ```ts
+ * bytesToNumberBE(Uint8Array.of(1, 0));
+ * ```
+ */
+function curves_utils_bytesToNumberBE(bytes) {
+    return utils_hexToNumber(utils_bytesToHex(bytes));
+}
+/**
+ * Parses little-endian bytes into bigint.
+ * @param bytes - Bytes in little-endian order.
+ * @returns Parsed bigint value.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Read a scalar encoded in little-endian form.
+ *
+ * ```ts
+ * bytesToNumberLE(Uint8Array.of(1, 0));
+ * ```
+ */
+function utils_bytesToNumberLE(bytes) {
+    return utils_hexToNumber(utils_bytesToHex(curves_utils_copyBytes(hashes_utils_abytes(bytes)).reverse()));
+}
+/**
+ * Encodes a bigint into fixed-length big-endian bytes.
+ * @param n - Number to encode.
+ * @param len - Output length in bytes. Must be greater than zero.
+ * @returns Big-endian byte array.
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Serialize a scalar into a 32-byte field element.
+ *
+ * ```ts
+ * numberToBytesBE(255n, 2);
+ * ```
+ */
+function curves_utils_numberToBytesBE(n, len) {
+    hashes_utils_anumber(len);
+    if (len === 0)
+        throw new RangeError('zero length');
+    n = abignumber(n);
+    const hex = n.toString(16);
+    // Detect overflow before hex parsing so oversized values don't leak the shared odd-hex error.
+    if (hex.length > len * 2)
+        throw new RangeError('number too large');
+    return utils_hexToBytes(hex.padStart(len * 2, '0'));
+}
+/**
+ * Encodes a bigint into fixed-length little-endian bytes.
+ * @param n - Number to encode.
+ * @param len - Output length in bytes.
+ * @returns Little-endian byte array.
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Serialize a scalar for little-endian protocols.
+ *
+ * ```ts
+ * numberToBytesLE(255n, 2);
+ * ```
+ */
+function utils_numberToBytesLE(n, len) {
+    return curves_utils_numberToBytesBE(n, len).reverse();
+}
+// Unpadded, rarely used
+/**
+ * Encodes a bigint into variable-length big-endian bytes.
+ * @param n - Number to encode.
+ * @returns Variable-length big-endian bytes.
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Serialize a bigint without fixed-width padding.
+ *
+ * ```ts
+ * numberToVarBytesBE(255n);
+ * ```
+ */
+function numberToVarBytesBE(n) {
+    return hexToBytes_(numberToHexUnpadded(abignumber(n)));
+}
+// Compares 2 u8a-s in kinda constant time
+/**
+ * Compares two byte arrays in constant-ish time.
+ * @param a - Left byte array.
+ * @param b - Right byte array.
+ * @returns `true` when bytes match.
+ * @example
+ * Compare two encoded points without early exit.
+ *
+ * ```ts
+ * equalBytes(Uint8Array.of(1), Uint8Array.of(1));
+ * ```
+ */
+function utils_equalBytes(a, b) {
+    a = curves_utils_abytes(a);
+    b = curves_utils_abytes(b);
+    if (a.length !== b.length)
+        return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++)
+        diff |= a[i] ^ b[i];
+    return diff === 0;
+}
+/**
+ * Copies Uint8Array. We can't use u8a.slice(), because u8a can be Buffer,
+ * and Buffer#slice creates mutable copy. Never use Buffers!
+ * @param bytes - Bytes to copy.
+ * @returns Detached copy.
+ * @example
+ * Make an isolated copy before mutating serialized bytes.
+ *
+ * ```ts
+ * copyBytes(Uint8Array.of(1, 2, 3));
+ * ```
+ */
+function curves_utils_copyBytes(bytes) {
+    // `Uint8Array.from(...)` would also accept arrays / other typed arrays. Keep this helper strict
+    // because callers use it at byte-validation boundaries before mutating the detached copy.
+    return Uint8Array.from(curves_utils_abytes(bytes));
+}
+/**
+ * Decodes 7-bit ASCII string to Uint8Array, throws on non-ascii symbols
+ * Should be safe to use for things expected to be ASCII.
+ * Returns exact same result as `TextEncoder` for ASCII or throws.
+ * @param ascii - ASCII input text.
+ * @returns Encoded bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Encode an ASCII domain-separation tag.
+ *
+ * ```ts
+ * asciiToBytes('ABC');
+ * ```
+ */
+function utils_asciiToBytes(ascii) {
+    if (typeof ascii !== 'string')
+        throw new TypeError('ascii string expected, got ' + typeof ascii);
+    return Uint8Array.from(ascii, (c, i) => {
+        const charCode = c.charCodeAt(0);
+        if (c.length !== 1 || charCode > 127) {
+            throw new RangeError(`string contains non-ASCII character "${ascii[i]}" with code ${charCode} at position ${i}`);
+        }
+        return charCode;
+    });
+}
+// Historical name: this accepts non-negative bigints, including zero.
+const isPosBig = (n) => typeof n === 'bigint' && _0n <= n;
+/**
+ * Checks whether a bigint lies inside a half-open range.
+ * @param n - Candidate value.
+ * @param min - Inclusive lower bound.
+ * @param max - Exclusive upper bound.
+ * @returns `true` when the value is inside the range.
+ * @example
+ * Check whether a candidate scalar fits the field order.
+ *
+ * ```ts
+ * inRange(2n, 1n, 3n);
+ * ```
+ */
+function inRange(n, min, max) {
+    return isPosBig(n) && isPosBig(min) && isPosBig(max) && min <= n && n < max;
+}
+/**
+ * Asserts `min <= n < max`. NOTE: upper bound is exclusive.
+ * @param title - Value label for error messages.
+ * @param n - Candidate value.
+ * @param min - Inclusive lower bound.
+ * @param max - Exclusive upper bound.
+ * Wrong-type inputs are not separated from out-of-range values here: they still flow through the
+ * shared `RangeError` path because this is only a throwing wrapper around `inRange(...)`.
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * Assert that a bigint stays within one half-open range.
+ *
+ * ```ts
+ * aInRange('x', 2n, 1n, 256n);
+ * ```
+ */
+function aInRange(title, n, min, max) {
+    // Why min <= n < max and not a (min < n < max) OR b (min <= n <= max)?
+    // consider P=256n, min=0n, max=P
+    // - a for min=0 would require -1:          `inRange('x', x, -1n, P)`
+    // - b would commonly require subtraction:  `inRange('x', x, 0n, P - 1n)`
+    // - our way is the cleanest:               `inRange('x', x, 0n, P)
+    if (!inRange(n, min, max))
+        throw new RangeError('expected valid ' + title + ': ' + min + ' <= n < ' + max + ', got ' + n);
+}
+// Bit operations
+/**
+ * Calculates amount of bits in a bigint.
+ * Same as `n.toString(2).length`
+ * TODO: merge with nLength in modular
+ * @param n - Value to inspect.
+ * @returns Bit length.
+ * @throws If the value is negative. {@link Error}
+ * @example
+ * Measure the bit length of a scalar before serialization.
+ *
+ * ```ts
+ * bitLen(8n);
+ * ```
+ */
+function utils_bitLen(n) {
+    // Size callers in this repo only use non-negative orders / scalars, so negative inputs are a
+    // contract bug and must not silently collapse to zero bits.
+    if (n < _0n)
+        throw new Error('expected non-negative bigint, got ' + n);
+    let len;
+    for (len = 0; n > _0n; n >>= _1n, len += 1)
+        ;
+    return len;
+}
+/**
+ * Gets single bit at position.
+ * NOTE: first bit position is 0 (same as arrays)
+ * Same as `!!+Array.from(n.toString(2)).reverse()[pos]`
+ * @param n - Source value.
+ * @param pos - Bit position. Negative positions are passed through to raw
+ *   bigint shift semantics; because the mask is built as `1n << pos`,
+ *   they currently collapse to `0n` and make the helper a no-op.
+ * @returns Bit as bigint.
+ * @example
+ * Gets single bit at position.
+ *
+ * ```ts
+ * bitGet(5n, 0);
+ * ```
+ */
+function bitGet(n, pos) {
+    return (n >> BigInt(pos)) & _1n;
+}
+/**
+ * Sets single bit at position.
+ * @param n - Source value.
+ * @param pos - Bit position. Negative positions are passed through to raw bigint shift semantics,
+ *   so they currently behave like left shifts.
+ * @param value - Whether the bit should be set.
+ * @returns Updated bigint.
+ * @example
+ * Sets single bit at position.
+ *
+ * ```ts
+ * bitSet(0n, 1, true);
+ * ```
+ */
+function bitSet(n, pos, value) {
+    const mask = _1n << BigInt(pos);
+    // Clearing needs AND-not here; OR with zero leaves an already-set bit untouched.
+    return value ? n | mask : n & ~mask;
+}
+/**
+ * Calculate mask for N bits. Not using ** operator with bigints because of old engines.
+ * Same as BigInt(`0b${Array(i).fill('1').join('')}`)
+ * @param n - Number of bits. Negative widths are currently passed through to raw bigint shift
+ *   semantics and therefore produce `-1n`.
+ * @returns Bitmask value.
+ * @example
+ * Calculate mask for N bits.
+ *
+ * ```ts
+ * bitMask(4);
+ * ```
+ */
+const utils_bitMask = (n) => (_1n << BigInt(n)) - _1n;
+/**
+ * Minimal HMAC-DRBG from NIST 800-90 for RFC6979 sigs.
+ * @param hashLen - Hash output size in bytes. Callers are expected to pass a positive length; `0`
+ *   is not rejected here and would make the internal generate loop non-progressing.
+ * @param qByteLen - Requested output size in bytes. Callers are expected to pass a positive length.
+ * @param hmacFn - HMAC implementation.
+ * @returns Function that will call DRBG until the predicate returns anything
+ *   other than `undefined`.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Build a deterministic nonce generator for RFC6979-style signing.
+ *
+ * ```ts
+ * import { createHmacDrbg } from '@noble/curves/utils.js';
+ * import { hmac } from '@noble/hashes/hmac.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * const drbg = createHmacDrbg(32, 32, (key, msg) => hmac(sha256, key, msg));
+ * const seed = new Uint8Array(32);
+ * drbg(seed, (bytes) => bytes);
+ * ```
+ */
+function createHmacDrbg(hashLen, qByteLen, hmacFn) {
+    anumber_(hashLen, 'hashLen');
+    anumber_(qByteLen, 'qByteLen');
+    if (typeof hmacFn !== 'function')
+        throw new TypeError('hmacFn must be a function');
+    // creates Uint8Array
+    const u8n = (len) => new Uint8Array(len);
+    const NULL = Uint8Array.of();
+    const byte0 = Uint8Array.of(0x00);
+    const byte1 = Uint8Array.of(0x01);
+    const _maxDrbgIters = 1000;
+    // Step B, Step C: set hashLen to 8*ceil(hlen/8).
+    // Minimal non-full-spec HMAC-DRBG from NIST 800-90 for RFC6979 signatures.
+    let v = u8n(hashLen);
+    // Steps B and C of RFC6979 3.2.
+    let k = u8n(hashLen);
+    let i = 0; // Iterations counter, will throw when over 1000
+    const reset = () => {
+        v.fill(1);
+        k.fill(0);
+        i = 0;
+    };
+    // hmac(k)(v, ...values)
+    const h = (...msgs) => hmacFn(k, curves_utils_concatBytes(v, ...msgs));
+    const reseed = (seed = NULL) => {
+        // HMAC-DRBG reseed() function. Steps D-G
+        k = h(byte0, seed); // k = hmac(k || v || 0x00 || seed)
+        v = h(); // v = hmac(k || v)
+        if (seed.length === 0)
+            return;
+        k = h(byte1, seed); // k = hmac(k || v || 0x01 || seed)
+        v = h(); // v = hmac(k || v)
+    };
+    const gen = () => {
+        // HMAC-DRBG generate() function
+        if (i++ >= _maxDrbgIters)
+            throw new Error('drbg: tried max amount of iterations');
+        let len = 0;
+        const out = [];
+        while (len < qByteLen) {
+            v = h();
+            const sl = v.slice();
+            out.push(sl);
+            len += v.length;
+        }
+        return curves_utils_concatBytes(...out);
+    };
+    const genUntil = (seed, pred) => {
+        reset();
+        reseed(seed); // Steps D-G
+        let res = undefined; // Step H: grind until the predicate accepts a candidate.
+        // Falsy values like 0 are valid outputs.
+        while ((res = pred(gen())) === undefined)
+            reseed();
+        reset();
+        return res;
+    };
+    return genUntil;
+}
+/**
+ * Validates declared required and optional field types on a plain object.
+ * Extra keys are intentionally ignored because many callers validate only the subset they use from
+ * richer option bags or runtime objects.
+ * @param object - Object to validate.
+ * @param fields - Required field types.
+ * @param optFields - Optional field types.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * Check user options before building a curve helper.
+ *
+ * ```ts
+ * validateObject({ flag: true }, { flag: 'boolean' });
+ * ```
+ */
+function utils_validateObject(object, fields = {}, optFields = {}) {
+    if (Object.prototype.toString.call(object) !== '[object Object]')
+        throw new TypeError('expected valid options object');
+    function checkField(fieldName, expectedType, isOpt) {
+        // Config/data fields must be explicit own properties, but runtime objects such as Field
+        // instances intentionally satisfy required method slots via their shared prototype.
+        if (!isOpt && expectedType !== 'function' && !Object.hasOwn(object, fieldName))
+            throw new TypeError(`param "${fieldName}" is invalid: expected own property`);
+        const val = object[fieldName];
+        if (isOpt && val === undefined)
+            return;
+        const current = typeof val;
+        if (current !== expectedType || val === null)
+            throw new TypeError(`param "${fieldName}" is invalid: expected ${expectedType}, got ${current}`);
+    }
+    const iter = (f, isOpt) => Object.entries(f).forEach(([k, v]) => checkField(k, v, isOpt));
+    iter(fields, false);
+    iter(optFields, true);
+}
+/**
+ * Throws not implemented error.
+ * @returns Never returns.
+ * @throws If the unfinished code path is reached. {@link Error}
+ * @example
+ * Surface the placeholder error from an unfinished code path.
+ *
+ * ```ts
+ * try {
+ *   notImplemented();
+ * } catch {}
+ * ```
+ */
+const notImplemented = () => {
+    throw new Error('not implemented');
+};
+//# sourceMappingURL=utils.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/curves/abstract/modular.js
+/**
+ * Utils for modular division and fields.
+ * Field over 11 is a finite (Galois) field is integer number operations `mod 11`.
+ * There is no division: it is replaced by modular multiplicative inverse.
+ * @module
+ */
+/*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+
+// Numbers aren't used in x25519 / x448 builds
+// prettier-ignore
+const modular_0n = /* @__PURE__ */ BigInt(0), modular_1n = /* @__PURE__ */ BigInt(1), _2n = /* @__PURE__ */ BigInt(2);
+// prettier-ignore
+const _3n = /* @__PURE__ */ BigInt(3), _4n = /* @__PURE__ */ BigInt(4), _5n = /* @__PURE__ */ BigInt(5);
+// prettier-ignore
+const _7n = /* @__PURE__ */ BigInt(7), _8n = /* @__PURE__ */ BigInt(8), _9n = /* @__PURE__ */ BigInt(9);
+const _16n = /* @__PURE__ */ BigInt(16);
+/**
+ * @param a - Dividend value.
+ * @param b - Positive modulus.
+ * @returns Reduced value in `[0, b)` only when `b` is positive.
+ * @throws If the modulus is not positive. {@link Error}
+ * @example
+ * Normalize a bigint into one field residue.
+ *
+ * ```ts
+ * mod(-1n, 5n);
+ * ```
+ */
+function modular_mod(a, b) {
+    if (b <= modular_0n)
+        throw new Error('mod: expected positive modulus, got ' + b);
+    const result = a % b;
+    return result >= modular_0n ? result : b + result;
+}
+/**
+ * Efficiently raise num to a power with modular reduction.
+ * Unsafe in some contexts: uses ladder, so can expose bigint bits.
+ * Low-level helper: callers that need canonical residues must pass a valid `num` for the chosen
+ * modulus instead of relying on the `power===0/1` fast paths to normalize it.
+ * @param num - Base value.
+ * @param power - Exponent value.
+ * @param modulo - Reduction modulus.
+ * @returns Modular exponentiation result.
+ * @throws If the modulus or exponent is invalid. {@link Error}
+ * @example
+ * Raise one bigint to a modular power.
+ *
+ * ```ts
+ * pow(2n, 6n, 11n) // 64n % 11n == 9n
+ * ```
+ */
+function pow(num, power, modulo) {
+    return FpPow(Field(modulo), num, power);
+}
+/**
+ * Does `x^(2^power)` mod p. `pow2(30, 4)` == `30^(2^4)`.
+ * Low-level helper: callers that need canonical residues must pass a valid `x` for the chosen
+ * modulus; the `power===0` fast path intentionally returns the input unchanged.
+ * @param x - Base value.
+ * @param power - Number of squarings.
+ * @param modulo - Reduction modulus.
+ * @returns Repeated-squaring result.
+ * @throws If the exponent is negative. {@link Error}
+ * @example
+ * Apply repeated squaring inside one field.
+ *
+ * ```ts
+ * pow2(3n, 2n, 11n);
+ * ```
+ */
+function pow2(x, power, modulo) {
+    if (power < modular_0n)
+        throw new Error('pow2: expected non-negative exponent, got ' + power);
+    let res = x;
+    while (power-- > modular_0n) {
+        res *= res;
+        res %= modulo;
+    }
+    return res;
+}
+/**
+ * Inverses number over modulo.
+ * Implemented using the {@link https://brilliant.org/wiki/extended-euclidean-algorithm/ | extended Euclidean algorithm}.
+ * @param number - Value to invert.
+ * @param modulo - Positive modulus.
+ * @returns Multiplicative inverse.
+ * @throws If the modulus is invalid or the inverse does not exist. {@link Error}
+ * @example
+ * Compute one modular inverse with the extended Euclidean algorithm.
+ *
+ * ```ts
+ * invert(3n, 11n);
+ * ```
+ */
+function invert(number, modulo) {
+    if (number === modular_0n)
+        throw new Error('invert: expected non-zero number');
+    if (modulo <= modular_0n)
+        throw new Error('invert: expected positive modulus, got ' + modulo);
+    // Fermat's little theorem "CT-like" version inv(n) = n^(m-2) mod m is 30x slower.
+    let a = modular_mod(number, modulo);
+    let b = modulo;
+    // prettier-ignore
+    let x = modular_0n, y = modular_1n, u = modular_1n, v = modular_0n;
+    while (a !== modular_0n) {
+        const q = b / a;
+        const r = b - a * q;
+        const m = x - u * q;
+        const n = y - v * q;
+        // prettier-ignore
+        b = a, a = r, x = u, y = v, u = m, v = n;
+    }
+    const gcd = b;
+    if (gcd !== modular_1n)
+        throw new Error('invert: does not exist');
+    return modular_mod(x, modulo);
+}
+function assertIsSquare(Fp, root, n) {
+    const F = Fp;
+    if (!F.eql(F.sqr(root), n))
+        throw new Error('Cannot find square root');
+}
+// Not all roots are possible! Example which will throw:
+// const NUM =
+// n = 72057594037927816n;
+// Fp = Field(BigInt('0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab'));
+function sqrt3mod4(Fp, n) {
+    const F = Fp;
+    const p1div4 = (F.ORDER + modular_1n) / _4n;
+    const root = F.pow(n, p1div4);
+    assertIsSquare(F, root, n);
+    return root;
+}
+// Equivalent `q = 5 (mod 8)` square-root formula (Atkin-style), not the RFC Appendix I.2 CMOV
+// pseudocode verbatim.
+function sqrt5mod8(Fp, n) {
+    const F = Fp;
+    const p5div8 = (F.ORDER - _5n) / _8n;
+    const n2 = F.mul(n, _2n);
+    const v = F.pow(n2, p5div8);
+    const nv = F.mul(n, v);
+    const i = F.mul(F.mul(nv, _2n), v);
+    const root = F.mul(nv, F.sub(i, F.ONE));
+    assertIsSquare(F, root, n);
+    return root;
+}
+// Based on RFC9380, Kong algorithm
+// prettier-ignore
+function sqrt9mod16(P) {
+    const Fp_ = Field(P);
+    const tn = tonelliShanks(P);
+    const c1 = tn(Fp_, Fp_.neg(Fp_.ONE)); //  1. c1 = sqrt(-1) in F, i.e., (c1^2) == -1 in F
+    const c2 = tn(Fp_, c1); //  2. c2 = sqrt(c1) in F, i.e., (c2^2) == c1 in F
+    const c3 = tn(Fp_, Fp_.neg(c1)); //  3. c3 = sqrt(-c1) in F, i.e., (c3^2) == -c1 in F
+    const c4 = (P + _7n) / _16n; //  4. c4 = (q + 7) / 16        # Integer arithmetic
+    return ((Fp, n) => {
+        const F = Fp;
+        let tv1 = F.pow(n, c4); //  1. tv1 = x^c4
+        let tv2 = F.mul(tv1, c1); //  2. tv2 = c1 * tv1
+        const tv3 = F.mul(tv1, c2); //  3. tv3 = c2 * tv1
+        const tv4 = F.mul(tv1, c3); //  4. tv4 = c3 * tv1
+        const e1 = F.eql(F.sqr(tv2), n); //  5.  e1 = (tv2^2) == x
+        const e2 = F.eql(F.sqr(tv3), n); //  6.  e2 = (tv3^2) == x
+        tv1 = F.cmov(tv1, tv2, e1); //  7. tv1 = CMOV(tv1, tv2, e1)  # Select tv2 if (tv2^2) == x
+        tv2 = F.cmov(tv4, tv3, e2); //  8. tv2 = CMOV(tv4, tv3, e2)  # Select tv3 if (tv3^2) == x
+        const e3 = F.eql(F.sqr(tv2), n); //  9.  e3 = (tv2^2) == x
+        const root = F.cmov(tv1, tv2, e3); // 10.  z = CMOV(tv1, tv2, e3)   # Select sqrt from tv1 & tv2
+        assertIsSquare(F, root, n);
+        return root;
+    });
+}
+/**
+ * Tonelli-Shanks square root search algorithm.
+ * This implementation is variable-time: it searches data-dependently for the first non-residue `Z`
+ * and for the smallest `i` in the main loop, unlike RFC 9380 Appendix I.4's constant-time shape.
+ * 1. {@link https://eprint.iacr.org/2012/685.pdf | eprint 2012/685}, page 12
+ * 2. Square Roots from 1; 24, 51, 10 to Dan Shanks
+ * @param P - field order
+ * @returns function that takes field Fp (created from P) and number n
+ * @throws If the field is too small, non-prime, or the square root does not exist. {@link Error}
+ * @example
+ * Construct a square-root helper for primes that need Tonelli-Shanks.
+ *
+ * ```ts
+ * import { Field, tonelliShanks } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const sqrt = tonelliShanks(17n)(Fp, 4n);
+ * ```
+ */
+function tonelliShanks(P) {
+    // Initialization (precomputation).
+    // Caching initialization could boost perf by 7%.
+    if (P < _3n)
+        throw new Error('sqrt is not defined for small field');
+    // Factor P - 1 = Q * 2^S, where Q is odd
+    let Q = P - modular_1n;
+    let S = 0;
+    while (Q % _2n === modular_0n) {
+        Q /= _2n;
+        S++;
+    }
+    // Find the first quadratic non-residue Z >= 2
+    let Z = _2n;
+    const _Fp = Field(P);
+    while (FpLegendre(_Fp, Z) === 1) {
+        // Basic primality test for P. After x iterations, chance of
+        // not finding quadratic non-residue is 2^x, so 2^1000.
+        if (Z++ > 1000)
+            throw new Error('Cannot find square root: probably non-prime P');
+    }
+    // Fast-path; usually done before Z, but we do "primality test".
+    if (S === 1)
+        return sqrt3mod4;
+    // Slow-path
+    // TODO: test on Fp2 and others
+    let cc = _Fp.pow(Z, Q); // c = z^Q
+    const Q1div2 = (Q + modular_1n) / _2n;
+    return function tonelliSlow(Fp, n) {
+        const F = Fp;
+        if (F.is0(n))
+            return n;
+        // Check if n is a quadratic residue using Legendre symbol
+        if (FpLegendre(F, n) !== 1)
+            throw new Error('Cannot find square root');
+        // Initialize variables for the main loop
+        let M = S;
+        let c = F.mul(F.ONE, cc); // c = z^Q, move cc from field _Fp into field Fp
+        let t = F.pow(n, Q); // t = n^Q, first guess at the fudge factor
+        let R = F.pow(n, Q1div2); // R = n^((Q+1)/2), first guess at the square root
+        // Main loop
+        // while t != 1
+        while (!F.eql(t, F.ONE)) {
+            if (F.is0(t))
+                return F.ZERO; // if t=0 return R=0
+            let i = 1;
+            // Find the smallest i >= 1 such that t^(2^i) ≡ 1 (mod P)
+            let t_tmp = F.sqr(t); // t^(2^1)
+            while (!F.eql(t_tmp, F.ONE)) {
+                i++;
+                t_tmp = F.sqr(t_tmp); // t^(2^2)...
+                if (i === M)
+                    throw new Error('Cannot find square root');
+            }
+            // Calculate the exponent for b: 2^(M - i - 1)
+            const exponent = modular_1n << BigInt(M - i - 1); // bigint is important
+            const b = F.pow(c, exponent); // b = 2^(M - i - 1)
+            // Update variables
+            M = i;
+            c = F.sqr(b); // c = b^2
+            t = F.mul(t, c); // t = (t * b^2)
+            R = F.mul(R, b); // R = R*b
+        }
+        return R;
+    };
+}
+/**
+ * Square root for a finite field. Will try optimized versions first:
+ *
+ * 1. P ≡ 3 (mod 4)
+ * 2. P ≡ 5 (mod 8)
+ * 3. P ≡ 9 (mod 16)
+ * 4. Tonelli-Shanks algorithm
+ *
+ * Different algorithms can give different roots, it is up to user to decide which one they want.
+ * For example there is FpSqrtOdd/FpSqrtEven to choose a root by oddness
+ * (used for hash-to-curve).
+ * @param P - Field order.
+ * @returns Square-root helper. The generic fallback inherits Tonelli-Shanks' variable-time
+ *   behavior and this selector assumes prime-field-style integer moduli.
+ * @throws If the field is unsupported or the square root does not exist. {@link Error}
+ * @example
+ * Choose the square-root helper appropriate for one field modulus.
+ *
+ * ```ts
+ * import { Field, FpSqrt } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const sqrt = FpSqrt(17n)(Fp, 4n);
+ * ```
+ */
+function FpSqrt(P) {
+    // P ≡ 3 (mod 4) => √n = n^((P+1)/4)
+    if (P % _4n === _3n)
+        return sqrt3mod4;
+    // P ≡ 5 (mod 8) => Atkin algorithm, page 10 of https://eprint.iacr.org/2012/685.pdf
+    if (P % _8n === _5n)
+        return sqrt5mod8;
+    // P ≡ 9 (mod 16) => Kong algorithm, page 11 of https://eprint.iacr.org/2012/685.pdf (algorithm 4)
+    if (P % _16n === _9n)
+        return sqrt9mod16(P);
+    // Tonelli-Shanks algorithm
+    return tonelliShanks(P);
+}
+/**
+ * @param num - Value to inspect.
+ * @param modulo - Field modulus.
+ * @returns `true` when the least-significant little-endian bit is set.
+ * @throws If the modulus is invalid for `mod(...)`. {@link Error}
+ * @example
+ * Inspect the low bit used by little-endian sign conventions.
+ *
+ * ```ts
+ * isNegativeLE(3n, 11n);
+ * ```
+ */
+const isNegativeLE = (num, modulo) => (modular_mod(num, modulo) & modular_1n) === modular_1n;
+// prettier-ignore
+// Arithmetic-only subset checked by validateField(). This is intentionally not the full runtime
+// IField contract: helpers like `isValidNot0`, `invertBatch`, `toBytes`, `fromBytes`, `cmov`, and
+// field-specific extras like `isOdd` are left to the callers that actually need them.
+const FIELD_FIELDS = [
+    'create', 'isValid', 'is0', 'neg', 'inv', 'sqrt', 'sqr',
+    'eql', 'add', 'sub', 'mul', 'pow', 'div',
+    'addN', 'subN', 'mulN', 'sqrN'
+];
+/**
+ * @param field - Field implementation.
+ * @returns Validated field. This only checks the arithmetic subset needed by generic helpers; it
+ *   does not guarantee full runtime-method coverage for serialization, batching, `cmov`, or
+ *   field-specific extras beyond positive `BYTES` / `BITS`.
+ * @throws If the field shape or numeric metadata are invalid. {@link Error}
+ * @example
+ * Check that a field implementation exposes the operations curve code expects.
+ *
+ * ```ts
+ * import { Field, validateField } from '@noble/curves/abstract/modular.js';
+ * const Fp = validateField(Field(17n));
+ * ```
+ */
+function modular_validateField(field) {
+    const initial = {
+        ORDER: 'bigint',
+        BYTES: 'number',
+        BITS: 'number',
+    };
+    const opts = FIELD_FIELDS.reduce((map, val) => {
+        map[val] = 'function';
+        return map;
+    }, initial);
+    utils_validateObject(field, opts);
+    // Runtime field implementations must expose real integer byte/bit sizes; fractional / NaN /
+    // infinite metadata leaks through validateObject(type='number') but breaks encoders and caches.
+    utils_asafenumber(field.BYTES, 'BYTES');
+    utils_asafenumber(field.BITS, 'BITS');
+    // Runtime field implementations must expose positive byte/bit sizes; zero leaks through the
+    // numeric shape checks above but still breaks encoding helpers and cached-length assumptions.
+    if (field.BYTES < 1 || field.BITS < 1)
+        throw new Error('invalid field: expected BYTES/BITS > 0');
+    if (field.ORDER <= modular_1n)
+        throw new Error('invalid field: expected ORDER > 1, got ' + field.ORDER);
+    return field;
+}
+// Generic field functions
+/**
+ * Same as `pow` but for Fp: non-constant-time.
+ * Unsafe in some contexts: uses ladder, so can expose bigint bits.
+ * @param Fp - Field implementation.
+ * @param num - Base value.
+ * @param power - Exponent value.
+ * @returns Powered field element.
+ * @throws If the exponent is negative. {@link Error}
+ * @example
+ * Raise one field element to a public exponent.
+ *
+ * ```ts
+ * import { Field, FpPow } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const x = FpPow(Fp, 3n, 5n);
+ * ```
+ */
+function FpPow(Fp, num, power) {
+    const F = Fp;
+    if (power < modular_0n)
+        throw new Error('invalid exponent, negatives unsupported');
+    if (power === modular_0n)
+        return F.ONE;
+    if (power === modular_1n)
+        return num;
+    let p = F.ONE;
+    let d = num;
+    while (power > modular_0n) {
+        if (power & modular_1n)
+            p = F.mul(p, d);
+        d = F.sqr(d);
+        power >>= modular_1n;
+    }
+    return p;
+}
+/**
+ * Efficiently invert an array of Field elements.
+ * Exception-free. Zero-valued field elements stay `undefined` unless `passZero` is enabled.
+ * @param Fp - Field implementation.
+ * @param nums - Values to invert.
+ * @param passZero - map 0 to 0 (instead of undefined)
+ * @returns Inverted values.
+ * @example
+ * Invert several field elements with one shared inversion.
+ *
+ * ```ts
+ * import { Field, FpInvertBatch } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const inv = FpInvertBatch(Fp, [1n, 2n, 4n]);
+ * ```
+ */
+function modular_FpInvertBatch(Fp, nums, passZero = false) {
+    const F = Fp;
+    const inverted = new Array(nums.length).fill(passZero ? F.ZERO : undefined);
+    // Walk from first to last, multiply them by each other MOD p
+    const multipliedAcc = nums.reduce((acc, num, i) => {
+        if (F.is0(num))
+            return acc;
+        inverted[i] = acc;
+        return F.mul(acc, num);
+    }, F.ONE);
+    // Invert last element
+    const invertedAcc = F.inv(multipliedAcc);
+    // Walk from last to first, multiply them by inverted each other MOD p
+    nums.reduceRight((acc, num, i) => {
+        if (F.is0(num))
+            return acc;
+        inverted[i] = F.mul(acc, inverted[i]);
+        return F.mul(acc, num);
+    }, invertedAcc);
+    return inverted;
+}
+/**
+ * @param Fp - Field implementation.
+ * @param lhs - Dividend value.
+ * @param rhs - Divisor value.
+ * @returns Division result.
+ * @throws If the divisor is non-invertible. {@link Error}
+ * @example
+ * Divide one field element by another.
+ *
+ * ```ts
+ * import { Field, FpDiv } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const x = FpDiv(Fp, 6n, 3n);
+ * ```
+ */
+function FpDiv(Fp, lhs, rhs) {
+    const F = Fp;
+    return F.mul(lhs, typeof rhs === 'bigint' ? invert(rhs, F.ORDER) : F.inv(rhs));
+}
+/**
+ * Legendre symbol.
+ * Legendre constant is used to calculate Legendre symbol (a | p)
+ * which denotes the value of a^((p-1)/2) (mod p).
+ *
+ * * (a | p) ≡ 1    if a is a square (mod p), quadratic residue
+ * * (a | p) ≡ -1   if a is not a square (mod p), quadratic non residue
+ * * (a | p) ≡ 0    if a ≡ 0 (mod p)
+ * @param Fp - Field implementation.
+ * @param n - Value to inspect.
+ * @returns Legendre symbol.
+ * @throws If the field returns an invalid Legendre symbol value. {@link Error}
+ * @example
+ * Compute the Legendre symbol of one field element.
+ *
+ * ```ts
+ * import { Field, FpLegendre } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const symbol = FpLegendre(Fp, 4n);
+ * ```
+ */
+function FpLegendre(Fp, n) {
+    const F = Fp;
+    // We can use 3rd argument as optional cache of this value
+    // but seems unneeded for now. The operation is very fast.
+    const p1mod2 = (F.ORDER - modular_1n) / _2n;
+    const powered = F.pow(n, p1mod2);
+    const yes = F.eql(powered, F.ONE);
+    const zero = F.eql(powered, F.ZERO);
+    const no = F.eql(powered, F.neg(F.ONE));
+    if (!yes && !zero && !no)
+        throw new Error('invalid Legendre symbol result');
+    return yes ? 1 : zero ? 0 : -1;
+}
+/**
+ * @param Fp - Field implementation.
+ * @param n - Value to inspect.
+ * @returns `true` when `Fp.sqrt(n)` exists. This includes `0`, even though strict "quadratic
+ *   residue" terminology often reserves that name for the non-zero square class.
+ * @throws If the field returns an invalid Legendre symbol value. {@link Error}
+ * @example
+ * Check whether one field element has a square root in the field.
+ *
+ * ```ts
+ * import { Field, FpIsSquare } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const isSquare = FpIsSquare(Fp, 4n);
+ * ```
+ */
+function FpIsSquare(Fp, n) {
+    const l = FpLegendre(Fp, n);
+    // Zero is a square too: 0 = 0^2, and Fp.sqrt(0) already returns 0.
+    return l !== -1;
+}
+/**
+ * @param n - Curve order. Callers are expected to pass a positive order.
+ * @param nBitLength - Optional cached bit length. Callers are expected to pass a positive cached
+ *   value when overriding the derived bit length.
+ * @returns Byte and bit lengths.
+ * @throws If the order or cached bit length is invalid. {@link Error}
+ * @example
+ * Measure the encoding sizes needed for one modulus.
+ *
+ * ```ts
+ * nLength(255n);
+ * ```
+ */
+function nLength(n, nBitLength) {
+    // Bit size, byte size of CURVE.n
+    if (nBitLength !== undefined)
+        curves_utils_anumber(nBitLength);
+    if (n <= modular_0n)
+        throw new Error('invalid n length: expected positive n, got ' + n);
+    if (nBitLength !== undefined && nBitLength < 1)
+        throw new Error('invalid n length: expected positive bit length, got ' + nBitLength);
+    const bits = utils_bitLen(n);
+    // Cached bit lengths smaller than ORDER would truncate serialized scalars/elements and poison
+    // any math that relies on the derived field metadata.
+    if (nBitLength !== undefined && nBitLength < bits)
+        throw new Error(`invalid n length: expected bit length (${bits}) >= n.length (${nBitLength})`);
+    const _nBitLength = nBitLength !== undefined ? nBitLength : bits;
+    const nByteLength = Math.ceil(_nBitLength / 8);
+    return { nBitLength: _nBitLength, nByteLength };
+}
+// Keep the lazy sqrt cache off-instance so Field(...) can return a frozen object. Otherwise the
+// cached helper write would keep the field surface externally mutable.
+const FIELD_SQRT = new WeakMap();
+class _Field {
+    ORDER;
+    BITS;
+    BYTES;
+    isLE;
+    ZERO = modular_0n;
+    ONE = modular_1n;
+    _lengths;
+    _mod;
+    constructor(ORDER, opts = {}) {
+        // ORDER <= 1 is degenerate: ONE would not be a valid field element and helpers like pow/inv
+        // would stop modeling field arithmetic.
+        if (ORDER <= modular_1n)
+            throw new Error('invalid field: expected ORDER > 1, got ' + ORDER);
+        let _nbitLength = undefined;
+        this.isLE = false;
+        if (opts != null && typeof opts === 'object') {
+            // Cached bit lengths are trusted here and should already be positive / consistent with ORDER.
+            if (typeof opts.BITS === 'number')
+                _nbitLength = opts.BITS;
+            if (typeof opts.sqrt === 'function')
+                // `_Field.prototype` is frozen below, so custom sqrt hooks must become own properties
+                // explicitly instead of relying on writable prototype shadowing via assignment.
+                Object.defineProperty(this, 'sqrt', { value: opts.sqrt, enumerable: true });
+            if (typeof opts.isLE === 'boolean')
+                this.isLE = opts.isLE;
+            if (opts.allowedLengths)
+                this._lengths = Object.freeze(opts.allowedLengths.slice());
+            if (typeof opts.modFromBytes === 'boolean')
+                this._mod = opts.modFromBytes;
+        }
+        const { nBitLength, nByteLength } = nLength(ORDER, _nbitLength);
+        if (nByteLength > 2048)
+            throw new Error('invalid field: expected ORDER of <= 2048 bytes');
+        this.ORDER = ORDER;
+        this.BITS = nBitLength;
+        this.BYTES = nByteLength;
+        Object.freeze(this);
+    }
+    create(num) {
+        return modular_mod(num, this.ORDER);
+    }
+    isValid(num) {
+        if (typeof num !== 'bigint')
+            throw new TypeError('invalid field element: expected bigint, got ' + typeof num);
+        return modular_0n <= num && num < this.ORDER; // 0 is valid element, but it's not invertible
+    }
+    is0(num) {
+        return num === modular_0n;
+    }
+    // is valid and invertible
+    isValidNot0(num) {
+        return !this.is0(num) && this.isValid(num);
+    }
+    isOdd(num) {
+        return (num & modular_1n) === modular_1n;
+    }
+    neg(num) {
+        return modular_mod(-num, this.ORDER);
+    }
+    eql(lhs, rhs) {
+        return lhs === rhs;
+    }
+    sqr(num) {
+        return modular_mod(num * num, this.ORDER);
+    }
+    add(lhs, rhs) {
+        return modular_mod(lhs + rhs, this.ORDER);
+    }
+    sub(lhs, rhs) {
+        return modular_mod(lhs - rhs, this.ORDER);
+    }
+    mul(lhs, rhs) {
+        return modular_mod(lhs * rhs, this.ORDER);
+    }
+    pow(num, power) {
+        return FpPow(this, num, power);
+    }
+    div(lhs, rhs) {
+        return modular_mod(lhs * invert(rhs, this.ORDER), this.ORDER);
+    }
+    // Same as above, but doesn't normalize
+    sqrN(num) {
+        return num * num;
+    }
+    addN(lhs, rhs) {
+        return lhs + rhs;
+    }
+    subN(lhs, rhs) {
+        return lhs - rhs;
+    }
+    mulN(lhs, rhs) {
+        return lhs * rhs;
+    }
+    inv(num) {
+        return invert(num, this.ORDER);
+    }
+    sqrt(num) {
+        // Caching sqrt helpers speeds up sqrt9mod16 by 5x and Tonelli-Shanks by about 10% without keeping
+        // the field instance itself mutable.
+        let sqrt = FIELD_SQRT.get(this);
+        if (!sqrt)
+            FIELD_SQRT.set(this, (sqrt = FpSqrt(this.ORDER)));
+        return sqrt(this, num);
+    }
+    toBytes(num) {
+        // Serialize fixed-width limbs without re-validating the field range. Callers that need a
+        // canonical encoding must pass a valid element; some protocols intentionally serialize raw
+        // residues here and reduce or validate them elsewhere.
+        return this.isLE ? utils_numberToBytesLE(num, this.BYTES) : curves_utils_numberToBytesBE(num, this.BYTES);
+    }
+    fromBytes(bytes, skipValidation = false) {
+        curves_utils_abytes(bytes);
+        const { _lengths: allowedLengths, BYTES, isLE, ORDER, _mod: modFromBytes } = this;
+        if (allowedLengths) {
+            // `allowedLengths` must list real positive byte lengths; otherwise empty input would get
+            // padded into zero and silently decode as a field element.
+            if (bytes.length < 1 || !allowedLengths.includes(bytes.length) || bytes.length > BYTES) {
+                throw new Error('Field.fromBytes: expected ' + allowedLengths + ' bytes, got ' + bytes.length);
+            }
+            const padded = new Uint8Array(BYTES);
+            // isLE add 0 to right, !isLE to the left.
+            padded.set(bytes, isLE ? 0 : padded.length - bytes.length);
+            bytes = padded;
+        }
+        if (bytes.length !== BYTES)
+            throw new Error('Field.fromBytes: expected ' + BYTES + ' bytes, got ' + bytes.length);
+        let scalar = isLE ? utils_bytesToNumberLE(bytes) : curves_utils_bytesToNumberBE(bytes);
+        if (modFromBytes)
+            scalar = modular_mod(scalar, ORDER);
+        if (!skipValidation)
+            if (!this.isValid(scalar))
+                throw new Error('invalid field element: outside of range 0..ORDER');
+        // Range validation is optional here because some protocols intentionally decode raw residues
+        // and reduce or validate them elsewhere.
+        return scalar;
+    }
+    // TODO: we don't need it here, move out to separate fn
+    invertBatch(lst) {
+        return modular_FpInvertBatch(this, lst);
+    }
+    // We can't move this out because Fp6, Fp12 implement it
+    // and it's unclear what to return in there.
+    cmov(a, b, condition) {
+        // Field elements have `isValid(...)`; the CMOV branch bit is a direct runtime input, so reject
+        // non-boolean selectors here instead of letting JS truthiness silently change arithmetic.
+        utils_abool(condition, 'condition');
+        return condition ? b : a;
+    }
+}
+// Freeze the shared method surface too; otherwise callers can still poison every Field instance by
+// monkey-patching `_Field.prototype` even if each instance is frozen.
+Object.freeze(_Field.prototype);
+/**
+ * Creates a finite field. Major performance optimizations:
+ * * 1. Denormalized operations like mulN instead of mul.
+ * * 2. Identical object shape: never add or remove keys.
+ * * 3. Frozen stable object shape; the lazy sqrt cache lives in a module-level `WeakMap`.
+ * Fragile: always run a benchmark on a change.
+ * Security note: operations and low-level serializers like `toBytes` don't check `isValid` for
+ * all elements for performance and protocol-flexibility reasons; callers are responsible for
+ * supplying valid elements when they need canonical field behavior.
+ * This is low-level code, please make sure you know what you're doing.
+ *
+ * Note about field properties:
+ * * CHARACTERISTIC p = prime number, number of elements in main subgroup.
+ * * ORDER q = similar to cofactor in curves, may be composite `q = p^m`.
+ *
+ * @param ORDER - field order, probably prime, or could be composite
+ * @param opts - Field options such as bit length or endianness. See {@link FieldOpts}.
+ * @returns Frozen field instance with a stable object shape. This wrapper forwards `opts` straight
+ *   into `_Field`, so it inherits `_Field`'s assumptions about cached sizes and `allowedLengths`.
+ * @example
+ * Construct one prime field with optional overrides.
+ *
+ * ```ts
+ * Field(11n);
+ * ```
+ */
+function Field(ORDER, opts = {}) {
+    return new _Field(ORDER, opts);
+}
+// Generic random scalar, we can do same for other fields if via Fp2.mul(Fp2.ONE, Fp2.random)?
+// This allows unsafe methods like ignore bias or zero. These unsafe, but often used in different protocols (if deterministic RNG).
+// which mean we cannot force this via opts.
+// Not sure what to do with randomBytes, we can accept it inside opts if wanted.
+// Probably need to export getMinHashLength somewhere?
+// random(bytes?: Uint8Array, unsafeAllowZero = false, unsafeAllowBias = false) {
+//   const LEN = !unsafeAllowBias ? getMinHashLength(ORDER) : BYTES;
+//   if (bytes === undefined) bytes = randomBytes(LEN); // _opts.randomBytes?
+//   const num = isLE ? bytesToNumberLE(bytes) : bytesToNumberBE(bytes);
+//   // `mod(x, 11)` can sometimes produce 0. `mod(x, 10) + 1` is the same, but no 0
+//   const reduced = unsafeAllowZero ? mod(num, ORDER) : mod(num, ORDER - _1n) + _1n;
+//   return reduced;
+// },
+/**
+ * @param Fp - Field implementation.
+ * @param elm - Value to square-root.
+ * @returns Odd square root when two roots exist. The special case `elm = 0` still returns `0`,
+ *   which is the only square root but is not odd.
+ * @throws If the field lacks oddness checks or the square root does not exist. {@link Error}
+ * @example
+ * Select the odd square root when two roots exist.
+ *
+ * ```ts
+ * import { Field, FpSqrtOdd } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const root = FpSqrtOdd(Fp, 4n);
+ * ```
+ */
+function FpSqrtOdd(Fp, elm) {
+    const F = Fp;
+    if (!F.isOdd)
+        throw new Error("Field doesn't have isOdd");
+    const root = F.sqrt(elm);
+    return F.isOdd(root) ? root : F.neg(root);
+}
+/**
+ * @param Fp - Field implementation.
+ * @param elm - Value to square-root.
+ * @returns Even square root.
+ * @throws If the field lacks oddness checks or the square root does not exist. {@link Error}
+ * @example
+ * Select the even square root when two roots exist.
+ *
+ * ```ts
+ * import { Field, FpSqrtEven } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const root = FpSqrtEven(Fp, 4n);
+ * ```
+ */
+function modular_FpSqrtEven(Fp, elm) {
+    const F = Fp;
+    if (!F.isOdd)
+        throw new Error("Field doesn't have isOdd");
+    const root = F.sqrt(elm);
+    return F.isOdd(root) ? F.neg(root) : root;
+}
+/**
+ * Returns total number of bytes consumed by the field element.
+ * For example, 32 bytes for usual 256-bit weierstrass curve.
+ * @param fieldOrder - number of field elements, usually CURVE.n. Callers are expected to pass an
+ *   order greater than 1.
+ * @returns byte length of field
+ * @throws If the field order is not a bigint. {@link Error}
+ * @example
+ * Read the fixed-width byte length of one field.
+ *
+ * ```ts
+ * getFieldBytesLength(255n);
+ * ```
+ */
+function getFieldBytesLength(fieldOrder) {
+    if (typeof fieldOrder !== 'bigint')
+        throw new Error('field order must be bigint');
+    // Valid field elements are in 0..ORDER-1, so ORDER <= 1 would make the encoded range degenerate.
+    if (fieldOrder <= modular_1n)
+        throw new Error('field order must be greater than 1');
+    // Valid field elements are < ORDER, so the maximal encoded element is ORDER - 1.
+    const bitLength = bitLen(fieldOrder - modular_1n);
+    return Math.ceil(bitLength / 8);
+}
+/**
+ * Returns minimal amount of bytes that can be safely reduced
+ * by field order.
+ * Should be 2^-128 for 128-bit curve such as P256.
+ * This is the reduction / modulo-bias lower bound; higher-level helpers may still impose a larger
+ * absolute floor for policy reasons.
+ * @param fieldOrder - number of field elements greater than 1, usually CURVE.n.
+ * @returns byte length of target hash
+ * @throws If the field order is invalid. {@link Error}
+ * @example
+ * Compute the minimum hash length needed for field reduction.
+ *
+ * ```ts
+ * getMinHashLength(255n);
+ * ```
+ */
+function getMinHashLength(fieldOrder) {
+    const length = getFieldBytesLength(fieldOrder);
+    return length + Math.ceil(length / 2);
+}
+/**
+ * "Constant-time" private key generation utility.
+ * Can take (n + n/2) or more bytes of uniform input e.g. from CSPRNG or KDF
+ * and convert them into private scalar, with the modulo bias being negligible.
+ * Needs at least 48 bytes of input for 32-byte private key. The implementation also keeps a hard
+ * 16-byte minimum even when `getMinHashLength(...)` is smaller, so toy-small inputs do not look
+ * accidentally acceptable for real scalar derivation.
+ * See {@link https://research.kudelskisecurity.com/2020/07/28/the-definitive-guide-to-modulo-bias-and-how-to-avoid-it/ | Kudelski's modulo-bias guide},
+ * {@link https://csrc.nist.gov/publications/detail/fips/186/5/final | FIPS 186-5 appendix A.2}, and
+ * {@link https://www.rfc-editor.org/rfc/rfc9380#section-5 | RFC 9380 section 5}. Unlike RFC 9380
+ * `hash_to_field`, this helper intentionally maps into the non-zero private-scalar range `1..n-1`.
+ * @param key - Uniform input bytes.
+ * @param fieldOrder - Size of subgroup.
+ * @param isLE - interpret hash bytes as LE num
+ * @returns valid private scalar
+ * @throws If the hash length or field order is invalid for scalar reduction. {@link Error}
+ * @example
+ * Map hash output into a private scalar range.
+ *
+ * ```ts
+ * mapHashToField(new Uint8Array(48).fill(1), 255n);
+ * ```
+ */
+function mapHashToField(key, fieldOrder, isLE = false) {
+    abytes(key);
+    const len = key.length;
+    const fieldLen = getFieldBytesLength(fieldOrder);
+    const minLen = Math.max(getMinHashLength(fieldOrder), 16);
+    // No toy-small inputs: the helper is for real scalar derivation, not tiny test curves. No huge
+    // inputs: easier to reason about JS timing / allocation behavior.
+    if (len < minLen || len > 1024)
+        throw new Error('expected ' + minLen + '-1024 bytes of input, got ' + len);
+    const num = isLE ? bytesToNumberLE(key) : bytesToNumberBE(key);
+    // `mod(x, 11)` can sometimes produce 0. `mod(x, 10) + 1` is the same, but no 0
+    const reduced = modular_mod(num, fieldOrder - modular_1n) + modular_1n;
+    return isLE ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
+}
+//# sourceMappingURL=modular.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/curves/abstract/curve.js
+/**
+ * Methods for elliptic curve multiplication by scalars.
+ * Contains wNAF, pippenger.
+ * @module
+ */
+/*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+
+
+const curve_0n = /* @__PURE__ */ BigInt(0);
+const curve_1n = /* @__PURE__ */ BigInt(1);
+/**
+ * Validates the static surface of a point constructor.
+ * This is only a cheap sanity check for the constructor hooks and fields consumed by generic
+ * factories; it does not certify `BASE`/`ZERO` semantics or prove the curve implementation itself.
+ * @param Point - Runtime point constructor.
+ * @throws On missing constructor hooks or malformed field metadata. {@link TypeError}
+ * @example
+ * Check that one point constructor exposes the static hooks generic helpers need.
+ *
+ * ```ts
+ * import { ed25519 } from '@noble/curves/ed25519.js';
+ * import { validatePointCons } from '@noble/curves/abstract/curve.js';
+ * validatePointCons(ed25519.Point);
+ * ```
+ */
+function validatePointCons(Point) {
+    const pc = Point;
+    if (typeof pc !== 'function')
+        throw new TypeError('Point must be a constructor');
+    // validateObject only accepts plain objects, so copy the constructor statics into one bag first.
+    validateObject({
+        Fp: pc.Fp,
+        Fn: pc.Fn,
+        fromAffine: pc.fromAffine,
+        fromBytes: pc.fromBytes,
+        fromHex: pc.fromHex,
+    }, {
+        Fp: 'object',
+        Fn: 'object',
+        fromAffine: 'function',
+        fromBytes: 'function',
+        fromHex: 'function',
+    });
+    validateField(pc.Fp);
+    validateField(pc.Fn);
+}
+/**
+ * Computes both candidates first, but the final selection still branches on `condition`, so this
+ * is not a strict constant-time CMOV primitive.
+ * @param condition - Whether to negate the point.
+ * @param item - Point-like value.
+ * @returns Original or negated value.
+ * @example
+ * Keep the point or return its negation based on one boolean branch.
+ *
+ * ```ts
+ * import { negateCt } from '@noble/curves/abstract/curve.js';
+ * import { p256 } from '@noble/curves/nist.js';
+ * const maybeNegated = negateCt(true, p256.Point.BASE);
+ * ```
+ */
+function negateCt(condition, item) {
+    const neg = item.negate();
+    return condition ? neg : item;
+}
+/**
+ * Takes a bunch of Projective Points but executes only one
+ * inversion on all of them. Inversion is very slow operation,
+ * so this improves performance massively.
+ * Optimization: converts a list of projective points to a list of identical points with Z=1.
+ * Input points are left unchanged; the normalized points are returned as fresh instances.
+ * @param c - Point constructor.
+ * @param points - Projective points.
+ * @returns Fresh projective points reconstructed from normalized affine coordinates.
+ * @example
+ * Batch-normalize projective points with a single shared inversion.
+ *
+ * ```ts
+ * import { normalizeZ } from '@noble/curves/abstract/curve.js';
+ * import { p256 } from '@noble/curves/nist.js';
+ * const points = normalizeZ(p256.Point, [p256.Point.BASE, p256.Point.BASE.double()]);
+ * ```
+ */
+function normalizeZ(c, points) {
+    const invertedZs = modular_FpInvertBatch(c.Fp, points.map((p) => p.Z));
+    return points.map((p, i) => c.fromAffine(p.toAffine(invertedZs[i])));
+}
+function validateW(W, bits) {
+    if (!Number.isSafeInteger(W) || W <= 0 || W > bits)
+        throw new Error('invalid window size, expected [1..' + bits + '], got W=' + W);
+}
+function calcWOpts(W, scalarBits) {
+    validateW(W, scalarBits);
+    const windows = Math.ceil(scalarBits / W) + 1; // W=8 33. Not 32, because we skip zero
+    const windowSize = 2 ** (W - 1); // W=8 128. Not 256, because we skip zero
+    const maxNumber = 2 ** W; // W=8 256
+    const mask = utils_bitMask(W); // W=8 255 == mask 0b11111111
+    const shiftBy = BigInt(W); // W=8 8
+    return { windows, windowSize, mask, maxNumber, shiftBy };
+}
+function calcOffsets(n, window, wOpts) {
+    const { windowSize, mask, maxNumber, shiftBy } = wOpts;
+    let wbits = Number(n & mask); // extract W bits.
+    let nextN = n >> shiftBy; // shift number by W bits.
+    // What actually happens here:
+    // const highestBit = Number(mask ^ (mask >> 1n));
+    // let wbits2 = wbits - 1; // skip zero
+    // if (wbits2 & highestBit) { wbits2 ^= Number(mask); // (~);
+    // split if bits > max: +224 => 256-32
+    if (wbits > windowSize) {
+        // we skip zero, which means instead of `>= size-1`, we do `> size`
+        wbits -= maxNumber; // -32, can be maxNumber - wbits, but then we need to set isNeg here.
+        nextN += curve_1n; // +256 (carry)
+    }
+    const offsetStart = window * windowSize;
+    const offset = offsetStart + Math.abs(wbits) - 1; // -1 because we skip zero; ignore when isZero
+    const isZero = wbits === 0; // is current window slice a 0?
+    const isNeg = wbits < 0; // is current window slice negative?
+    const isNegF = window % 2 !== 0; // fake branch noise only
+    const offsetF = offsetStart; // fake branch noise only
+    return { nextN, offset, isZero, isNeg, isNegF, offsetF };
+}
+function validateMSMPoints(points, c) {
+    if (!Array.isArray(points))
+        throw new Error('array expected');
+    points.forEach((p, i) => {
+        if (!(p instanceof c))
+            throw new Error('invalid point at index ' + i);
+    });
+}
+function validateMSMScalars(scalars, field) {
+    if (!Array.isArray(scalars))
+        throw new Error('array of scalars expected');
+    scalars.forEach((s, i) => {
+        if (!field.isValid(s))
+            throw new Error('invalid scalar at index ' + i);
+    });
+}
+// Since points in different groups cannot be equal (different object constructor),
+// we can have single place to store precomputes.
+// Allows to make points frozen / immutable.
+const pointPrecomputes = new WeakMap();
+const pointWindowSizes = new WeakMap();
+function getW(P) {
+    // To disable precomputes:
+    // return 1;
+    // `1` is also the uncached sentinel: use the ladder / non-precomputed path.
+    return pointWindowSizes.get(P) || 1;
+}
+function assert0(n) {
+    // Internal invariant: a non-zero remainder here means the wNAF window decomposition or loop
+    // count is inconsistent, not that the original caller provided a bad scalar.
+    if (n !== curve_0n)
+        throw new Error('invalid wNAF');
+}
+/**
+ * Elliptic curve multiplication of Point by scalar. Fragile.
+ * Table generation takes **30MB of ram and 10ms on high-end CPU**,
+ * but may take much longer on slow devices. Actual generation will happen on
+ * first call of `multiply()`. By default, `BASE` point is precomputed.
+ *
+ * Scalars should always be less than curve order: this should be checked inside of a curve itself.
+ * Creates precomputation tables for fast multiplication:
+ * - private scalar is split by fixed size windows of W bits
+ * - every window point is collected from window's table & added to accumulator
+ * - since windows are different, same point inside tables won't be accessed more than once per calc
+ * - each multiplication is 'Math.ceil(CURVE_ORDER / 𝑊) + 1' point additions (fixed for any scalar)
+ * - +1 window is neccessary for wNAF
+ * - wNAF reduces table size: 2x less memory + 2x faster generation, but 10% slower multiplication
+ *
+ * TODO: research returning a 2d JS array of windows instead of a single window.
+ * This would allow windows to be in different memory locations.
+ * @param Point - Point constructor.
+ * @param bits - Scalar bit length.
+ * @example
+ * Elliptic curve multiplication of Point by scalar.
+ *
+ * ```ts
+ * import { wNAF } from '@noble/curves/abstract/curve.js';
+ * import { p256 } from '@noble/curves/nist.js';
+ * const ladder = new wNAF(p256.Point, p256.Point.Fn.BITS);
+ * ```
+ */
+class wNAF {
+    BASE;
+    ZERO;
+    Fn;
+    bits;
+    // Parametrized with a given Point class (not individual point)
+    constructor(Point, bits) {
+        this.BASE = Point.BASE;
+        this.ZERO = Point.ZERO;
+        this.Fn = Point.Fn;
+        this.bits = bits;
+    }
+    // non-const time multiplication ladder
+    _unsafeLadder(elm, n, p = this.ZERO) {
+        let d = elm;
+        while (n > curve_0n) {
+            if (n & curve_1n)
+                p = p.add(d);
+            d = d.double();
+            n >>= curve_1n;
+        }
+        return p;
+    }
+    /**
+     * Creates a wNAF precomputation window. Used for caching.
+     * Default window size is set by `utils.precompute()` and is equal to 8.
+     * Number of precomputed points depends on the curve size:
+     * 2^(𝑊−1) * (Math.ceil(𝑛 / 𝑊) + 1), where:
+     * - 𝑊 is the window size
+     * - 𝑛 is the bitlength of the curve order.
+     * For a 256-bit curve and window size 8, the number of precomputed points is 128 * 33 = 4224.
+     * @param point - Point instance
+     * @param W - window size
+     * @returns precomputed point tables flattened to a single array
+     */
+    precomputeWindow(point, W) {
+        const { windows, windowSize } = calcWOpts(W, this.bits);
+        const points = [];
+        let p = point;
+        let base = p;
+        for (let window = 0; window < windows; window++) {
+            base = p;
+            points.push(base);
+            // i=1, bc we skip 0
+            for (let i = 1; i < windowSize; i++) {
+                base = base.add(p);
+                points.push(base);
+            }
+            p = base.double();
+        }
+        return points;
+    }
+    /**
+     * Implements ec multiplication using precomputed tables and w-ary non-adjacent form.
+     * More compact implementation:
+     * https://github.com/paulmillr/noble-secp256k1/blob/47cb1669b6e506ad66b35fe7d76132ae97465da2/index.ts#L502-L541
+     * @returns real and fake (for const-time) points
+     */
+    wNAF(W, precomputes, n) {
+        // Scalar should be smaller than field order
+        if (!this.Fn.isValid(n))
+            throw new Error('invalid scalar');
+        // Accumulators
+        let p = this.ZERO;
+        let f = this.BASE;
+        // This code was first written with assumption that 'f' and 'p' will never be infinity point:
+        // since each addition is multiplied by 2 ** W, it cannot cancel each other. However,
+        // there is negate now: it is possible that negated element from low value
+        // would be the same as high element, which will create carry into next window.
+        // It's not obvious how this can fail, but still worth investigating later.
+        const wo = calcWOpts(W, this.bits);
+        for (let window = 0; window < wo.windows; window++) {
+            // (n === _0n) is handled and not early-exited. isEven and offsetF are used for noise
+            const { nextN, offset, isZero, isNeg, isNegF, offsetF } = calcOffsets(n, window, wo);
+            n = nextN;
+            if (isZero) {
+                // bits are 0: add garbage to fake point
+                // Important part for const-time getPublicKey: add random "noise" point to f.
+                f = f.add(negateCt(isNegF, precomputes[offsetF]));
+            }
+            else {
+                // bits are 1: add to result point
+                p = p.add(negateCt(isNeg, precomputes[offset]));
+            }
+        }
+        assert0(n);
+        // Return both real and fake points so JIT keeps the noise path alive.
+        // Known caveat: negate/carry interactions can still drive `f` to infinity even when `p` is not,
+        // which weakens the noise path and leaves this only "less const-time" by about one bigint mul.
+        return { p, f };
+    }
+    /**
+     * Implements unsafe EC multiplication using precomputed tables
+     * and w-ary non-adjacent form.
+     * @param acc - accumulator point to add result of multiplication
+     * @returns point
+     */
+    wNAFUnsafe(W, precomputes, n, acc = this.ZERO) {
+        const wo = calcWOpts(W, this.bits);
+        for (let window = 0; window < wo.windows; window++) {
+            if (n === curve_0n)
+                break; // Early-exit, skip 0 value
+            const { nextN, offset, isZero, isNeg } = calcOffsets(n, window, wo);
+            n = nextN;
+            if (isZero) {
+                // Window bits are 0: skip processing.
+                // Move to next window.
+                continue;
+            }
+            else {
+                const item = precomputes[offset];
+                acc = acc.add(isNeg ? item.negate() : item); // Re-using acc allows to save adds in MSM
+            }
+        }
+        assert0(n);
+        return acc;
+    }
+    getPrecomputes(W, point, transform) {
+        // Cache key is only point identity plus the remembered window size; callers must not reuse the
+        // same point with incompatible `transform(...)` layouts and expect a separate cache entry.
+        let comp = pointPrecomputes.get(point);
+        if (!comp) {
+            comp = this.precomputeWindow(point, W);
+            if (W !== 1) {
+                // Doing transform outside of if brings 15% perf hit
+                if (typeof transform === 'function')
+                    comp = transform(comp);
+                pointPrecomputes.set(point, comp);
+            }
+        }
+        return comp;
+    }
+    cached(point, scalar, transform) {
+        const W = getW(point);
+        return this.wNAF(W, this.getPrecomputes(W, point, transform), scalar);
+    }
+    unsafe(point, scalar, transform, prev) {
+        const W = getW(point);
+        if (W === 1)
+            return this._unsafeLadder(point, scalar, prev); // For W=1 ladder is ~x2 faster
+        return this.wNAFUnsafe(W, this.getPrecomputes(W, point, transform), scalar, prev);
+    }
+    // We calculate precomputes for elliptic curve point multiplication
+    // using windowed method. This specifies window size and
+    // stores precomputed values. Usually only base point would be precomputed.
+    createCache(P, W) {
+        validateW(W, this.bits);
+        pointWindowSizes.set(P, W);
+        pointPrecomputes.delete(P);
+    }
+    hasCache(elm) {
+        return getW(elm) !== 1;
+    }
+}
+/**
+ * Endomorphism-specific multiplication for Koblitz curves.
+ * Cost: 128 dbl, 0-256 adds.
+ * @param Point - Point constructor.
+ * @param point - Input point.
+ * @param k1 - First non-negative absolute scalar chunk.
+ * @param k2 - Second non-negative absolute scalar chunk.
+ * @returns Partial multiplication results.
+ * @example
+ * Endomorphism-specific multiplication for Koblitz curves.
+ *
+ * ```ts
+ * import { mulEndoUnsafe } from '@noble/curves/abstract/curve.js';
+ * import { secp256k1 } from '@noble/curves/secp256k1.js';
+ * const parts = mulEndoUnsafe(secp256k1.Point, secp256k1.Point.BASE, 3n, 5n);
+ * ```
+ */
+function mulEndoUnsafe(Point, point, k1, k2) {
+    let acc = point;
+    let p1 = Point.ZERO;
+    let p2 = Point.ZERO;
+    while (k1 > curve_0n || k2 > curve_0n) {
+        if (k1 & curve_1n)
+            p1 = p1.add(acc);
+        if (k2 & curve_1n)
+            p2 = p2.add(acc);
+        acc = acc.double();
+        k1 >>= curve_1n;
+        k2 >>= curve_1n;
+    }
+    return { p1, p2 };
+}
+/**
+ * Pippenger algorithm for multi-scalar multiplication (MSM, Pa + Qb + Rc + ...).
+ * 30x faster vs naive addition on L=4096, 10x faster than precomputes.
+ * For N=254bit, L=1, it does: 1024 ADD + 254 DBL. For L=5: 1536 ADD + 254 DBL.
+ * Algorithmically constant-time (for same L), even when 1 point + scalar, or when scalar = 0.
+ * @param c - Curve Point constructor
+ * @param points - array of L curve points
+ * @param scalars - array of L scalars (aka secret keys / bigints)
+ * @returns MSM result point. Empty input is accepted and returns the identity.
+ * @throws If the point set, scalar set, or MSM sizing is invalid. {@link Error}
+ * @example
+ * Pippenger algorithm for multi-scalar multiplication (MSM, Pa + Qb + Rc + ...).
+ *
+ * ```ts
+ * import { pippenger } from '@noble/curves/abstract/curve.js';
+ * import { p256 } from '@noble/curves/nist.js';
+ * const point = pippenger(p256.Point, [p256.Point.BASE, p256.Point.BASE.double()], [2n, 3n]);
+ * ```
+ */
+function pippenger(c, points, scalars) {
+    // If we split scalars by some window (let's say 8 bits), every chunk will only
+    // take 256 buckets even if there are 4096 scalars, also re-uses double.
+    // TODO:
+    // - https://eprint.iacr.org/2024/750.pdf
+    // - https://tches.iacr.org/index.php/TCHES/article/view/10287
+    // 0 is accepted in scalars
+    const fieldN = c.Fn;
+    validateMSMPoints(points, c);
+    validateMSMScalars(scalars, fieldN);
+    const plength = points.length;
+    const slength = scalars.length;
+    if (plength !== slength)
+        throw new Error('arrays of points and scalars must have equal length');
+    // if (plength === 0) throw new Error('array must be of length >= 2');
+    const zero = c.ZERO;
+    const wbits = bitLen(BigInt(plength));
+    let windowSize = 1; // bits
+    if (wbits > 12)
+        windowSize = wbits - 3;
+    else if (wbits > 4)
+        windowSize = wbits - 2;
+    else if (wbits > 0)
+        windowSize = 2;
+    const MASK = bitMask(windowSize);
+    const buckets = new Array(Number(MASK) + 1).fill(zero); // +1 for zero array
+    const lastBits = Math.floor((fieldN.BITS - 1) / windowSize) * windowSize;
+    let sum = zero;
+    for (let i = lastBits; i >= 0; i -= windowSize) {
+        buckets.fill(zero);
+        for (let j = 0; j < slength; j++) {
+            const scalar = scalars[j];
+            const wbits = Number((scalar >> BigInt(i)) & MASK);
+            buckets[wbits] = buckets[wbits].add(points[j]);
+        }
+        let resI = zero; // not using this will do small speed-up, but will lose ct
+        // Skip first bucket, because it is zero
+        for (let j = buckets.length - 1, sumI = zero; j > 0; j--) {
+            sumI = sumI.add(buckets[j]);
+            resI = resI.add(sumI);
+        }
+        sum = sum.add(resI);
+        if (i !== 0)
+            for (let j = 0; j < windowSize; j++)
+                sum = sum.double();
+    }
+    return sum;
+}
+/**
+ * Precomputed multi-scalar multiplication (MSM, Pa + Qb + Rc + ...).
+ * @param c - Curve Point constructor
+ * @param points - array of L curve points
+ * @param windowSize - Precompute window size.
+ * @returns Function which multiplies points with scalars. The closure accepts
+ *   `scalars.length <= points.length`, and omitted trailing scalars are treated as zero.
+ * @throws If the point set or precompute window is invalid. {@link Error}
+ * @example
+ * Precomputed multi-scalar multiplication (MSM, Pa + Qb + Rc + ...).
+ *
+ * ```ts
+ * import { precomputeMSMUnsafe } from '@noble/curves/abstract/curve.js';
+ * import { p256 } from '@noble/curves/nist.js';
+ * const msm = precomputeMSMUnsafe(p256.Point, [p256.Point.BASE], 4);
+ * const point = msm([3n]);
+ * ```
+ */
+function precomputeMSMUnsafe(c, points, windowSize) {
+    /**
+     * Performance Analysis of Window-based Precomputation
+     *
+     * Base Case (256-bit scalar, 8-bit window):
+     * - Standard precomputation requires:
+     *   - 31 additions per scalar × 256 scalars = 7,936 ops
+     *   - Plus 255 summary additions = 8,191 total ops
+     *   Note: Summary additions can be optimized via accumulator
+     *
+     * Chunked Precomputation Analysis:
+     * - Using 32 chunks requires:
+     *   - 255 additions per chunk
+     *   - 256 doublings
+     *   - Total: (255 × 32) + 256 = 8,416 ops
+     *
+     * Memory Usage Comparison:
+     * Window Size | Standard Points | Chunked Points
+     * ------------|-----------------|---------------
+     *     4-bit   |     520         |      15
+     *     8-bit   |    4,224        |     255
+     *    10-bit   |   13,824        |   1,023
+     *    16-bit   |  557,056        |  65,535
+     *
+     * Key Advantages:
+     * 1. Enables larger window sizes due to reduced memory overhead
+     * 2. More efficient for smaller scalar counts:
+     *    - 16 chunks: (16 × 255) + 256 = 4,336 ops
+     *    - ~2x faster than standard 8,191 ops
+     *
+     * Limitations:
+     * - Not suitable for plain precomputes (requires 256 constant doublings)
+     * - Performance degrades with larger scalar counts:
+     *   - Optimal for ~256 scalars
+     *   - Less efficient for 4096+ scalars (Pippenger preferred)
+     */
+    const fieldN = c.Fn;
+    validateW(windowSize, fieldN.BITS);
+    validateMSMPoints(points, c);
+    const zero = c.ZERO;
+    const tableSize = 2 ** windowSize - 1; // table size (without zero)
+    const chunks = Math.ceil(fieldN.BITS / windowSize); // chunks of item
+    const MASK = bitMask(windowSize);
+    const tables = points.map((p) => {
+        const res = [];
+        for (let i = 0, acc = p; i < tableSize; i++) {
+            res.push(acc);
+            acc = acc.add(p);
+        }
+        return res;
+    });
+    return (scalars) => {
+        validateMSMScalars(scalars, fieldN);
+        if (scalars.length > points.length)
+            throw new Error('array of scalars must be smaller than array of points');
+        let res = zero;
+        for (let i = 0; i < chunks; i++) {
+            // No need to double if accumulator is still zero.
+            if (res !== zero)
+                for (let j = 0; j < windowSize; j++)
+                    res = res.double();
+            const shiftBy = BigInt(chunks * windowSize - (i + 1) * windowSize);
+            for (let j = 0; j < scalars.length; j++) {
+                const n = scalars[j];
+                const curr = Number((n >> shiftBy) & MASK);
+                if (!curr)
+                    continue; // skip zero scalars chunks
+                res = res.add(tables[j][curr - 1]);
+            }
+        }
+        return res;
+    };
+}
+function createField(order, field, isLE) {
+    if (field) {
+        // Reuse supplied field overrides as-is; `isLE` only affects freshly constructed fallback
+        // fields, and validateField() below only checks the arithmetic subset, not full byte/cmov
+        // behavior.
+        if (field.ORDER !== order)
+            throw new Error('Field.ORDER must match order: Fp == p, Fn == n');
+        modular_validateField(field);
+        return field;
+    }
+    else {
+        return Field(order, { isLE });
+    }
+}
+/**
+ * Validates basic CURVE shape and field membership, then creates fields.
+ * This does not prove that the generator is on-curve, that subgroup/order data are consistent, or
+ * that the curve equation itself is otherwise sane.
+ * @param type - Curve family.
+ * @param CURVE - Curve parameters.
+ * @param curveOpts - Optional field overrides:
+ *   - `Fp` (optional): Optional base-field override.
+ *   - `Fn` (optional): Optional scalar-field override.
+ * @param FpFnLE - Whether field encoding is little-endian.
+ * @returns Frozen curve parameters and fields.
+ * @throws If the curve parameters or field overrides are invalid. {@link Error}
+ * @example
+ * Build curve fields from raw constants before constructing a curve instance.
+ *
+ * ```ts
+ * const curve = createCurveFields('weierstrass', {
+ *   p: 17n,
+ *   n: 19n,
+ *   h: 1n,
+ *   a: 2n,
+ *   b: 2n,
+ *   Gx: 5n,
+ *   Gy: 1n,
+ * });
+ * ```
+ */
+function createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
+    if (FpFnLE === undefined)
+        FpFnLE = type === 'edwards';
+    if (!CURVE || typeof CURVE !== 'object')
+        throw new Error(`expected valid ${type} CURVE object`);
+    for (const p of ['p', 'n', 'h']) {
+        const val = CURVE[p];
+        if (!(typeof val === 'bigint' && val > curve_0n))
+            throw new Error(`CURVE.${p} must be positive bigint`);
+    }
+    const Fp = createField(CURVE.p, curveOpts.Fp, FpFnLE);
+    const Fn = createField(CURVE.n, curveOpts.Fn, FpFnLE);
+    const _b = type === 'weierstrass' ? 'b' : 'd';
+    const params = ['Gx', 'Gy', 'a', _b];
+    for (const p of params) {
+        // @ts-ignore
+        if (!Fp.isValid(CURVE[p]))
+            throw new Error(`CURVE.${p} must be valid field element of CURVE.Fp`);
+    }
+    CURVE = Object.freeze(Object.assign({}, CURVE));
+    return { CURVE, Fp, Fn };
+}
+/**
+ * @param randomSecretKey - Secret-key generator.
+ * @param getPublicKey - Public-key derivation helper.
+ * @returns Keypair generator.
+ * @example
+ * Build a `keygen()` helper from existing secret-key and public-key primitives.
+ *
+ * ```ts
+ * import { createKeygen } from '@noble/curves/abstract/curve.js';
+ * import { p256 } from '@noble/curves/nist.js';
+ * const keygen = createKeygen(p256.utils.randomSecretKey, p256.getPublicKey);
+ * const pair = keygen();
+ * ```
+ */
+function createKeygen(randomSecretKey, getPublicKey) {
+    return function keygen(seed) {
+        const secretKey = randomSecretKey(seed);
+        return { secretKey, publicKey: getPublicKey(secretKey) };
+    };
+}
+//# sourceMappingURL=curve.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/curves/abstract/edwards.js
+/**
+ * Twisted Edwards curve. The formula is: ax² + y² = 1 + dx²y².
+ * For design rationale of types / exports, see weierstrass module documentation.
+ * Untwisted Edwards curves exist, but they aren't used in real-world protocols.
+ * @module
+ */
+/*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+
+
+
+// Be friendly to bad ECMAScript parsers by not using bigint literals
+// prettier-ignore
+const edwards_0n = /* @__PURE__ */ BigInt(0), edwards_1n = /* @__PURE__ */ BigInt(1), edwards_2n = /* @__PURE__ */ BigInt(2), edwards_8n = /* @__PURE__ */ BigInt(8);
+// Affine Edwards-equation check only; this does not prove subgroup membership, canonical
+// encoding, prime-order base-point requirements, or identity exclusion.
+function isEdValidXY(Fp, CURVE, x, y) {
+    const x2 = Fp.sqr(x);
+    const y2 = Fp.sqr(y);
+    const left = Fp.add(Fp.mul(CURVE.a, x2), y2);
+    const right = Fp.add(Fp.ONE, Fp.mul(CURVE.d, Fp.mul(x2, y2)));
+    return Fp.eql(left, right);
+}
+/**
+ * @param params - Curve parameters. See {@link EdwardsOpts}.
+ * @param extraOpts - Optional helpers and overrides. See {@link EdwardsExtraOpts}.
+ * @returns Edwards point constructor. Generator validation here only checks
+ *   that `(Gx, Gy)` satisfies the affine Edwards equation.
+ *   RFC 8032 base-point constraints like `B != (0,1)` and `[L]B = 0`
+ *   are left to the caller's chosen parameters, since eager subgroup
+ *   validation here adds about 10-15ms to heavyweight imports like ed448.
+ *   The returned constructor also eagerly marks `Point.BASE` for W=8
+ *   precompute caching. Some code paths still assume
+ *   `Fp.BYTES === Fn.BYTES`, so mismatched byte lengths are not fully audited here.
+ * @throws If the curve parameters or Edwards overrides are invalid. {@link Error}
+ * @example
+ * ```ts
+ * import { edwards } from '@noble/curves/abstract/edwards.js';
+ * import { jubjub } from '@noble/curves/misc.js';
+ * // Build a point constructor from explicit curve parameters, then use its base point.
+ * const Point = edwards(jubjub.Point.CURVE());
+ * Point.BASE.toHex();
+ * ```
+ */
+function edwards(params, extraOpts = {}) {
+    const opts = extraOpts;
+    const validated = createCurveFields('edwards', params, opts, opts.FpFnLE);
+    const { Fp, Fn } = validated;
+    let CURVE = validated.CURVE;
+    const { h: cofactor } = CURVE;
+    utils_validateObject(opts, {}, { uvRatio: 'function' });
+    // Important:
+    // There are some places where Fp.BYTES is used instead of nByteLength.
+    // So far, everything has been tested with curves of Fp.BYTES == nByteLength.
+    // TODO: test and find curves which behave otherwise.
+    const MASK = edwards_2n << (BigInt(Fn.BYTES * 8) - edwards_1n);
+    const modP = (n) => Fp.create(n); // Function overrides
+    // sqrt(u/v)
+    const uvRatio = opts.uvRatio === undefined
+        ? (u, v) => {
+            try {
+                return { isValid: true, value: Fp.sqrt(Fp.div(u, v)) };
+            }
+            catch (e) {
+                return { isValid: false, value: edwards_0n };
+            }
+        }
+        : opts.uvRatio;
+    // Validate whether the passed curve params are valid.
+    // equation ax² + y² = 1 + dx²y² should work for generator point.
+    if (!isEdValidXY(Fp, CURVE, CURVE.Gx, CURVE.Gy))
+        throw new Error('bad curve params: generator point');
+    /**
+     * Asserts coordinate is valid: 0 <= n < MASK.
+     * Coordinates >= Fp.ORDER are allowed for zip215.
+     */
+    function acoord(title, n, banZero = false) {
+        const min = banZero ? edwards_1n : edwards_0n;
+        aInRange('coordinate ' + title, n, min, MASK);
+        return n;
+    }
+    function aedpoint(other) {
+        if (!(other instanceof Point))
+            throw new Error('EdwardsPoint expected');
+    }
+    // Extended Point works in extended coordinates: (X, Y, Z, T) ∋ (x=X/Z, y=Y/Z, T=xy).
+    // https://en.wikipedia.org/wiki/Twisted_Edwards_curve#Extended_coordinates
+    class Point {
+        // base / generator point
+        static BASE = new Point(CURVE.Gx, CURVE.Gy, edwards_1n, modP(CURVE.Gx * CURVE.Gy));
+        // zero / infinity / identity point
+        static ZERO = new Point(edwards_0n, edwards_1n, edwards_1n, edwards_0n); // 0, 1, 1, 0
+        // math field
+        static Fp = Fp;
+        // scalar field
+        static Fn = Fn;
+        X;
+        Y;
+        Z;
+        T;
+        constructor(X, Y, Z, T) {
+            this.X = acoord('x', X);
+            this.Y = acoord('y', Y);
+            this.Z = acoord('z', Z, true);
+            this.T = acoord('t', T);
+            Object.freeze(this);
+        }
+        static CURVE() {
+            return CURVE;
+        }
+        /**
+         * Create one extended Edwards point from affine coordinates.
+         * Does NOT validate that the point is on-curve or torsion-free.
+         * Use `.assertValidity()` on adversarial inputs.
+         */
+        static fromAffine(p) {
+            if (p instanceof Point)
+                throw new Error('extended point not allowed');
+            const { x, y } = p || {};
+            acoord('x', x);
+            acoord('y', y);
+            return new Point(x, y, edwards_1n, modP(x * y));
+        }
+        // Uses algo from RFC8032 5.1.3.
+        static fromBytes(bytes, zip215 = false) {
+            const len = Fp.BYTES;
+            const { a, d } = CURVE;
+            bytes = curves_utils_copyBytes(curves_utils_abytes(bytes, len, 'point'));
+            utils_abool(zip215, 'zip215');
+            const normed = curves_utils_copyBytes(bytes); // copy again, we'll manipulate it
+            const lastByte = bytes[len - 1]; // select last byte
+            normed[len - 1] = lastByte & ~0x80; // clear last bit
+            const y = utils_bytesToNumberLE(normed);
+            // zip215=true is good for consensus-critical apps. =false follows RFC8032 / NIST186-5.
+            // RFC8032 prohibits >= p, but ZIP215 doesn't
+            // zip215=true:  0 <= y < MASK (2^256 for ed25519)
+            // zip215=false: 0 <= y < P (2^255-19 for ed25519)
+            const max = zip215 ? MASK : Fp.ORDER;
+            aInRange('point.y', y, edwards_0n, max);
+            // Ed25519: x² = (y²-1)/(dy²+1) mod p. Ed448: x² = (y²-1)/(dy²-1) mod p. Generic case:
+            // ax²+y²=1+dx²y² => y²-1=dx²y²-ax² => y²-1=x²(dy²-a) => x²=(y²-1)/(dy²-a)
+            const y2 = modP(y * y); // denominator is always non-0 mod p.
+            const u = modP(y2 - edwards_1n); // u = y² - 1
+            const v = modP(d * y2 - a); // v = d y² + 1.
+            let { isValid, value: x } = uvRatio(u, v); // √(u/v)
+            if (!isValid)
+                throw new Error('bad point: invalid y coordinate');
+            const isXOdd = (x & edwards_1n) === edwards_1n; // There are 2 square roots. Use x_0 bit to select proper
+            const isLastByteOdd = (lastByte & 0x80) !== 0; // x_0, last bit
+            if (!zip215 && x === edwards_0n && isLastByteOdd)
+                // if x=0 and x_0 = 1, fail
+                throw new Error('bad point: x=0 and x_0=1');
+            if (isLastByteOdd !== isXOdd)
+                x = modP(-x); // if x_0 != x mod 2, set x = p-x
+            return Point.fromAffine({ x, y });
+        }
+        static fromHex(hex, zip215 = false) {
+            return Point.fromBytes(curves_utils_hexToBytes(hex), zip215);
+        }
+        get x() {
+            return this.toAffine().x;
+        }
+        get y() {
+            return this.toAffine().y;
+        }
+        precompute(windowSize = 8, isLazy = true) {
+            wnaf.createCache(this, windowSize);
+            if (!isLazy)
+                this.multiply(edwards_2n); // random number
+            return this;
+        }
+        // Useful in fromAffine() - not for fromBytes(), which always created valid points.
+        assertValidity() {
+            const p = this;
+            const { a, d } = CURVE;
+            // Keep generic Edwards validation fail-closed on the neutral point.
+            // Even though ZERO is algebraically valid and can roundtrip through encodings, higher-level
+            // callers often reach it only through broken hash/scalar plumbing; rejecting it here avoids
+            // silently treating that degenerate state as an ordinary public point.
+            if (p.is0())
+                throw new Error('bad point: ZERO'); // TODO: optimize, with vars below?
+            // Equation in affine coordinates: ax² + y² = 1 + dx²y²
+            // Equation in projective coordinates (X/Z, Y/Z, Z):  (aX² + Y²)Z² = Z⁴ + dX²Y²
+            const { X, Y, Z, T } = p;
+            const X2 = modP(X * X); // X²
+            const Y2 = modP(Y * Y); // Y²
+            const Z2 = modP(Z * Z); // Z²
+            const Z4 = modP(Z2 * Z2); // Z⁴
+            const aX2 = modP(X2 * a); // aX²
+            const left = modP(Z2 * modP(aX2 + Y2)); // (aX² + Y²)Z²
+            const right = modP(Z4 + modP(d * modP(X2 * Y2))); // Z⁴ + dX²Y²
+            if (left !== right)
+                throw new Error('bad point: equation left != right (1)');
+            // In Extended coordinates we also have T, which is x*y=T/Z: check X*Y == Z*T
+            const XY = modP(X * Y);
+            const ZT = modP(Z * T);
+            if (XY !== ZT)
+                throw new Error('bad point: equation left != right (2)');
+        }
+        // Compare one point to another.
+        equals(other) {
+            aedpoint(other);
+            const { X: X1, Y: Y1, Z: Z1 } = this;
+            const { X: X2, Y: Y2, Z: Z2 } = other;
+            const X1Z2 = modP(X1 * Z2);
+            const X2Z1 = modP(X2 * Z1);
+            const Y1Z2 = modP(Y1 * Z2);
+            const Y2Z1 = modP(Y2 * Z1);
+            return X1Z2 === X2Z1 && Y1Z2 === Y2Z1;
+        }
+        is0() {
+            return this.equals(Point.ZERO);
+        }
+        negate() {
+            // Flips point sign to a negative one (-x, y in affine coords)
+            return new Point(modP(-this.X), this.Y, this.Z, modP(-this.T));
+        }
+        // Fast algo for doubling Extended Point.
+        // https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#doubling-dbl-2008-hwcd
+        // Cost: 4M + 4S + 1*a + 6add + 1*2.
+        double() {
+            const { a } = CURVE;
+            const { X: X1, Y: Y1, Z: Z1 } = this;
+            const A = modP(X1 * X1); // A = X12
+            const B = modP(Y1 * Y1); // B = Y12
+            const C = modP(edwards_2n * modP(Z1 * Z1)); // C = 2*Z12
+            const D = modP(a * A); // D = a*A
+            const x1y1 = X1 + Y1;
+            const E = modP(modP(x1y1 * x1y1) - A - B); // E = (X1+Y1)2-A-B
+            const G = D + B; // G = D+B
+            const F = G - C; // F = G-C
+            const H = D - B; // H = D-B
+            const X3 = modP(E * F); // X3 = E*F
+            const Y3 = modP(G * H); // Y3 = G*H
+            const T3 = modP(E * H); // T3 = E*H
+            const Z3 = modP(F * G); // Z3 = F*G
+            return new Point(X3, Y3, Z3, T3);
+        }
+        // Fast algo for adding 2 Extended Points.
+        // https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#addition-add-2008-hwcd
+        // Cost: 9M + 1*a + 1*d + 7add.
+        add(other) {
+            aedpoint(other);
+            const { a, d } = CURVE;
+            const { X: X1, Y: Y1, Z: Z1, T: T1 } = this;
+            const { X: X2, Y: Y2, Z: Z2, T: T2 } = other;
+            const A = modP(X1 * X2); // A = X1*X2
+            const B = modP(Y1 * Y2); // B = Y1*Y2
+            const C = modP(T1 * d * T2); // C = T1*d*T2
+            const D = modP(Z1 * Z2); // D = Z1*Z2
+            const E = modP((X1 + Y1) * (X2 + Y2) - A - B); // E = (X1+Y1)*(X2+Y2)-A-B
+            const F = D - C; // F = D-C
+            const G = D + C; // G = D+C
+            const H = modP(B - a * A); // H = B-a*A
+            const X3 = modP(E * F); // X3 = E*F
+            const Y3 = modP(G * H); // Y3 = G*H
+            const T3 = modP(E * H); // T3 = E*H
+            const Z3 = modP(F * G); // Z3 = F*G
+            return new Point(X3, Y3, Z3, T3);
+        }
+        subtract(other) {
+            // Validate before calling `negate()` so wrong inputs fail with the point guard
+            // instead of leaking a foreign `negate()` error.
+            aedpoint(other);
+            return this.add(other.negate());
+        }
+        // Constant-time multiplication.
+        multiply(scalar) {
+            // 1 <= scalar < L
+            // Keep the subgroup-scalar contract strict instead of reducing 0 / n to ZERO.
+            // In keygen/signing-style callers, those values usually mean broken hash/scalar plumbing,
+            // and failing closed is safer than silently producing the identity point.
+            if (!Fn.isValidNot0(scalar))
+                throw new RangeError('invalid scalar: expected 1 <= sc < curve.n');
+            const { p, f } = wnaf.cached(this, scalar, (p) => normalizeZ(Point, p));
+            return normalizeZ(Point, [p, f])[0];
+        }
+        // Non-constant-time multiplication. Uses double-and-add algorithm.
+        // It's faster, but should only be used when you don't care about
+        // an exposed private key e.g. sig verification.
+        // Keeps the same subgroup-scalar contract: 0 is allowed for public-scalar callers, but
+        // n and larger values are rejected instead of being reduced mod n to the identity point.
+        multiplyUnsafe(scalar) {
+            // 0 <= scalar < L
+            if (!Fn.isValid(scalar))
+                throw new RangeError('invalid scalar: expected 0 <= sc < curve.n');
+            if (scalar === edwards_0n)
+                return Point.ZERO;
+            if (this.is0() || scalar === edwards_1n)
+                return this;
+            return wnaf.unsafe(this, scalar, (p) => normalizeZ(Point, p));
+        }
+        // Checks if point is of small order.
+        // If you add something to small order point, you will have "dirty"
+        // point with torsion component.
+        // Clears cofactor and checks if the result is 0.
+        isSmallOrder() {
+            return this.clearCofactor().is0();
+        }
+        // Multiplies point by curve order and checks if the result is 0.
+        // Returns `false` is the point is dirty.
+        isTorsionFree() {
+            return wnaf.unsafe(this, CURVE.n).is0();
+        }
+        // Converts Extended point to default (x, y) coordinates.
+        // Can accept precomputed Z^-1 - for example, from invertBatch.
+        toAffine(invertedZ) {
+            const p = this;
+            let iz = invertedZ;
+            const { X, Y, Z } = p;
+            const is0 = p.is0();
+            if (iz == null)
+                iz = is0 ? edwards_8n : Fp.inv(Z); // 8 was chosen arbitrarily
+            const x = modP(X * iz);
+            const y = modP(Y * iz);
+            const zz = Fp.mul(Z, iz);
+            if (is0)
+                return { x: edwards_0n, y: edwards_1n };
+            if (zz !== edwards_1n)
+                throw new Error('invZ was invalid');
+            return { x, y };
+        }
+        clearCofactor() {
+            if (cofactor === edwards_1n)
+                return this;
+            return this.multiplyUnsafe(cofactor);
+        }
+        toBytes() {
+            const { x, y } = this.toAffine();
+            // Fp.toBytes() allows non-canonical encoding of y (>= p).
+            const bytes = Fp.toBytes(y);
+            // Each y has 2 valid points: (x, y), (x,-y).
+            // When compressing, it's enough to store y and use the last byte to encode sign of x
+            bytes[bytes.length - 1] |= x & edwards_1n ? 0x80 : 0;
+            return bytes;
+        }
+        toHex() {
+            return curves_utils_bytesToHex(this.toBytes());
+        }
+        toString() {
+            return `<Point ${this.is0() ? 'ZERO' : this.toHex()}>`;
+        }
+    }
+    const wnaf = new wNAF(Point, Fn.BITS);
+    // Keep constructor work cheap: subgroup/generator validation belongs to the caller's curve
+    // parameters, and doing the extra checks here adds about 10-15ms to heavy module imports.
+    // Callers that construct custom curves are responsible for supplying the correct base point.
+    // try {
+    //   Point.BASE.assertValidity();
+    //   if (!Point.BASE.isTorsionFree()) throw new Error('bad point: not in prime-order subgroup');
+    // } catch {
+    //   throw new Error('bad curve params: generator point');
+    // }
+    // Tiny toy curves can have scalar fields narrower than 8 bits. Skip the
+    // eager W=8 cache there instead of rejecting an otherwise valid constructor.
+    if (Fn.BITS >= 8)
+        Point.BASE.precompute(8); // Enable precomputes. Slows down first publicKey computation by 20ms.
+    Object.freeze(Point.prototype);
+    Object.freeze(Point);
+    return Point;
+}
+/**
+ * Base class for prime-order points like Ristretto255 and Decaf448.
+ * These points eliminate cofactor issues by representing equivalence classes
+ * of Edwards curve points. Multiple Edwards representatives can describe the
+ * same abstract wrapper element, so wrapper validity is not the same thing as
+ * the hidden representative being torsion-free.
+ * @param ep - Backing Edwards point.
+ * @example
+ * Base class for prime-order points like Ristretto255 and Decaf448.
+ *
+ * ```ts
+ * import { ristretto255 } from '@noble/curves/ed25519.js';
+ * const point = ristretto255.Point.BASE.multiply(2n);
+ * ```
+ */
+class PrimeEdwardsPoint {
+    static BASE;
+    static ZERO;
+    static Fp;
+    static Fn;
+    ep;
+    /**
+     * Wrap one internal Edwards representative directly.
+     * This is not a canonical encoding boundary: alternate Edwards
+     * representatives may still describe the same abstract wrapper element.
+     */
+    constructor(ep) {
+        this.ep = ep;
+    }
+    // Static methods that must be implemented by subclasses
+    static fromBytes(_bytes) {
+        notImplemented();
+    }
+    static fromHex(_hex) {
+        notImplemented();
+    }
+    get x() {
+        return this.toAffine().x;
+    }
+    get y() {
+        return this.toAffine().y;
+    }
+    // Common implementations
+    clearCofactor() {
+        // no-op for the abstract prime-order wrapper group; this is about the
+        // wrapper element, not the hidden Edwards representative.
+        return this;
+    }
+    assertValidity() {
+        // Keep wrapper validity at the abstract-group boundary. Canonical decode
+        // may choose Edwards representatives that differ by small torsion, so
+        // checking `this.ep.isTorsionFree()` here would reject valid wrapper points.
+        this.ep.assertValidity();
+    }
+    /**
+     * Return affine coordinates of the current internal Edwards representative.
+     * This is a convenience helper, not a canonical Ristretto/Decaf encoding.
+     * Equal abstract elements may expose different `x` / `y`; use
+     * `toBytes()` / `fromBytes()` for canonical roundtrips.
+     */
+    toAffine(invertedZ) {
+        return this.ep.toAffine(invertedZ);
+    }
+    toHex() {
+        return curves_utils_bytesToHex(this.toBytes());
+    }
+    toString() {
+        return this.toHex();
+    }
+    isTorsionFree() {
+        // Abstract Ristretto/Decaf elements are already prime-order even when the
+        // hidden Edwards representative is not torsion-free.
+        return true;
+    }
+    isSmallOrder() {
+        return false;
+    }
+    add(other) {
+        this.assertSame(other);
+        return this.init(this.ep.add(other.ep));
+    }
+    subtract(other) {
+        this.assertSame(other);
+        return this.init(this.ep.subtract(other.ep));
+    }
+    multiply(scalar) {
+        return this.init(this.ep.multiply(scalar));
+    }
+    multiplyUnsafe(scalar) {
+        return this.init(this.ep.multiplyUnsafe(scalar));
+    }
+    double() {
+        return this.init(this.ep.double());
+    }
+    negate() {
+        return this.init(this.ep.negate());
+    }
+    precompute(windowSize, isLazy) {
+        this.ep.precompute(windowSize, isLazy);
+        // Keep the wrapper identity stable like the backing Edwards API instead of
+        // allocating a fresh wrapper around the same cached point.
+        return this;
+    }
+}
+/**
+ * Initializes EdDSA signatures over given Edwards curve.
+ * @param Point - Edwards point constructor.
+ * @param cHash - Hash function.
+ * @param eddsaOpts - Optional signature helpers. See {@link EdDSAOpts}.
+ * @returns EdDSA helper namespace.
+ * @throws If the hash function, options, or derived point operations are invalid. {@link Error}
+ * @example
+ * Initializes EdDSA signatures over given Edwards curve.
+ *
+ * ```ts
+ * import { eddsa } from '@noble/curves/abstract/edwards.js';
+ * import { jubjub } from '@noble/curves/misc.js';
+ * import { sha512 } from '@noble/hashes/sha2.js';
+ * const sigs = eddsa(jubjub.Point, sha512);
+ * const { secretKey, publicKey } = sigs.keygen();
+ * const msg = new TextEncoder().encode('hello noble');
+ * const sig = sigs.sign(msg, secretKey);
+ * const isValid = sigs.verify(sig, msg, publicKey);
+ * ```
+ */
+function eddsa(Point, cHash, eddsaOpts = {}) {
+    if (typeof cHash !== 'function')
+        throw new Error('"hash" function param is required');
+    const hash = cHash;
+    const opts = eddsaOpts;
+    utils_validateObject(opts, {}, {
+        adjustScalarBytes: 'function',
+        randomBytes: 'function',
+        domain: 'function',
+        prehash: 'function',
+        zip215: 'boolean',
+        mapToCurve: 'function',
+    });
+    const { prehash } = opts;
+    const { BASE, Fp, Fn } = Point;
+    const outputLen = hash.outputLen;
+    const expectedLen = 2 * Fp.BYTES;
+    // When hash metadata is available, reject incompatible EdDSA wrappers at construction time
+    // instead of deferring the mismatch until the first keygen/sign call.
+    if (outputLen !== undefined) {
+        utils_asafenumber(outputLen, 'hash.outputLen');
+        if (outputLen !== expectedLen)
+            throw new Error(`hash.outputLen must be ${expectedLen}, got ${outputLen}`);
+    }
+    const randomBytes = opts.randomBytes === undefined ? curves_utils_randomBytes : opts.randomBytes;
+    const adjustScalarBytes = opts.adjustScalarBytes === undefined
+        ? (bytes) => bytes
+        : opts.adjustScalarBytes;
+    const domain = opts.domain === undefined
+        ? (data, ctx, phflag) => {
+            utils_abool(phflag, 'phflag');
+            if (ctx.length || phflag)
+                throw new Error('Contexts/pre-hash are not supported');
+            return data;
+        }
+        : opts.domain; // NOOP
+    // Parse an EdDSA digest as a little-endian integer and reduce it modulo the scalar field order.
+    function modN_LE(hash) {
+        return Fn.create(utils_bytesToNumberLE(hash)); // Not Fn.fromBytes: it has length limit
+    }
+    // Get the hashed private scalar per RFC8032 5.1.5
+    function getPrivateScalar(key) {
+        const len = lengths.secretKey;
+        curves_utils_abytes(key, lengths.secretKey, 'secretKey');
+        // Hash private key with curve's hash function to produce uniformingly random input
+        // Check byte lengths: ensure(64, h(ensure(32, key)))
+        const hashed = curves_utils_abytes(hash(key), 2 * len, 'hashedSecretKey');
+        // Slice before clamping so in-place adjustors don't corrupt the prefix half.
+        const head = adjustScalarBytes(hashed.slice(0, len)); // clear first half bits, produce FE
+        const prefix = hashed.slice(len, 2 * len); // second half is called key prefix (5.1.6)
+        const scalar = modN_LE(head); // The actual private scalar
+        return { head, prefix, scalar };
+    }
+    /** Convenience method that creates public key from scalar. RFC8032 5.1.5
+     * Also exposes the derived scalar/prefix tuple and point form reused by sign().
+     */
+    function getExtendedPublicKey(secretKey) {
+        const { head, prefix, scalar } = getPrivateScalar(secretKey);
+        const point = BASE.multiply(scalar); // Point on Edwards curve aka public key
+        const pointBytes = point.toBytes();
+        return { head, prefix, scalar, point, pointBytes };
+    }
+    /** Calculates EdDSA pub key. RFC8032 5.1.5. */
+    function getPublicKey(secretKey) {
+        return getExtendedPublicKey(secretKey).pointBytes;
+    }
+    // Hash domain-separated chunks into a little-endian scalar modulo the group order.
+    function hashDomainToScalar(context = Uint8Array.of(), ...msgs) {
+        const msg = curves_utils_concatBytes(...msgs);
+        return modN_LE(hash(domain(msg, curves_utils_abytes(context, undefined, 'context'), !!prehash)));
+    }
+    /** Signs message with secret key. RFC8032 5.1.6 */
+    function sign(msg, secretKey, options = {}) {
+        msg = curves_utils_abytes(msg, undefined, 'message');
+        if (prehash)
+            msg = prehash(msg); // for ed25519ph etc.
+        const { prefix, scalar, pointBytes } = getExtendedPublicKey(secretKey);
+        const r = hashDomainToScalar(options.context, prefix, msg); // r = dom2(F, C) || prefix || PH(M)
+        // RFC 8032 5.1.6 allows r mod L = 0, and SUPERCOP ref10 accepts the resulting identity-point
+        // signature.
+        // We intentionally keep the safe multiply() rejection here so a miswired all-zero hash provider
+        // fails loudly instead of silently producing a degenerate signature.
+        const R = BASE.multiply(r).toBytes(); // R = rG
+        const k = hashDomainToScalar(options.context, R, pointBytes, msg); // R || A || PH(M)
+        const s = Fn.create(r + k * scalar); // S = (r + k * s) mod L
+        if (!Fn.isValid(s))
+            throw new Error('sign failed: invalid s'); // 0 <= s < L
+        const rs = curves_utils_concatBytes(R, Fn.toBytes(s));
+        return curves_utils_abytes(rs, lengths.signature, 'result');
+    }
+    // Keep the shared helper strict by default: RFC 8032 / NIST-style wrappers should reject
+    // non-canonical encodings unless they explicitly opt into ZIP-215's more permissive decode rules.
+    const verifyOpts = {
+        zip215: opts.zip215,
+    };
+    /**
+     * Verifies EdDSA signature against message and public key. RFC 8032 §§5.1.7 and 5.2.7.
+     * A cofactored verification equation is checked.
+     */
+    function verify(sig, msg, publicKey, options = verifyOpts) {
+        // Preserve the wrapper-selected default for `{}` / `{ zip215: undefined }`, not just omitted opts.
+        const { context } = options;
+        const zip215 = options.zip215 === undefined ? !!verifyOpts.zip215 : options.zip215;
+        const len = lengths.signature;
+        sig = curves_utils_abytes(sig, len, 'signature');
+        msg = curves_utils_abytes(msg, undefined, 'message');
+        publicKey = curves_utils_abytes(publicKey, lengths.publicKey, 'publicKey');
+        if (zip215 !== undefined)
+            utils_abool(zip215, 'zip215');
+        if (prehash)
+            msg = prehash(msg); // for ed25519ph, etc
+        const mid = len / 2;
+        const r = sig.subarray(0, mid);
+        const s = utils_bytesToNumberLE(sig.subarray(mid, len));
+        let A, R, SB;
+        try {
+            // ZIP-215 is more permissive than RFC 8032 / NIST186-5. Use it only for wrappers that
+            // explicitly want consensus-style unreduced encoding acceptance.
+            // zip215=true:  0 <= y < MASK (2^256 for ed25519)
+            // zip215=false: 0 <= y < P (2^255-19 for ed25519)
+            A = Point.fromBytes(publicKey, zip215);
+            R = Point.fromBytes(r, zip215);
+            SB = BASE.multiplyUnsafe(s); // 0 <= s < l is done inside
+        }
+        catch (error) {
+            return false;
+        }
+        // RFC 8032 §§5.1.7/5.2.7 and FIPS 186-5 §§7.7.2/7.8.2 only decode A' and check the cofactored
+        // verification equation; they do not add a separate low-order-public-key rejection here.
+        // Strict mode still rejects small-order A' intentionally for SBS-style non-repudiation and to
+        // avoid ambiguous verification outcomes where unusual low-order keys can make distinct
+        // key/signature/message combinations verify.
+        if (!zip215 && A.isSmallOrder())
+            return false;
+        // ZIP-215 accepts noncanonical / unreduced point encodings, so the challenge hash must use the
+        // exact signature/public-key bytes rather than canonicalized re-encodings of the decoded points.
+        const k = hashDomainToScalar(context, r, publicKey, msg);
+        const RkA = R.add(A.multiplyUnsafe(k));
+        // Check the cofactored verification equation via the curve cofactor h.
+        // [h][S]B = [h]R + [h][k]A'
+        return RkA.subtract(SB).clearCofactor().is0();
+    }
+    const _size = Fp.BYTES; // 32 for ed25519, 57 for ed448
+    const lengths = {
+        secretKey: _size,
+        publicKey: _size,
+        signature: 2 * _size,
+        seed: _size,
+    };
+    function randomSecretKey(seed) {
+        seed = seed === undefined ? randomBytes(lengths.seed) : seed;
+        return curves_utils_abytes(seed, lengths.seed, 'seed');
+    }
+    function isValidSecretKey(key) {
+        return curves_utils_isBytes(key) && key.length === lengths.secretKey;
+    }
+    function isValidPublicKey(key, zip215) {
+        try {
+            // Preserve the wrapper-selected default for omitted / `undefined` ZIP-215 flags here too.
+            return !!Point.fromBytes(key, zip215 === undefined ? verifyOpts.zip215 : zip215);
+        }
+        catch (error) {
+            return false;
+        }
+    }
+    const utils = {
+        getExtendedPublicKey,
+        randomSecretKey,
+        isValidSecretKey,
+        isValidPublicKey,
+        /**
+         * Converts ed public key to x public key. Uses formula:
+         * - ed25519:
+         *   - `(u, v) = ((1+y)/(1-y), sqrt(-486664)*u/x)`
+         *   - `(x, y) = (sqrt(-486664)*u/v, (u-1)/(u+1))`
+         * - ed448:
+         *   - `(u, v) = ((y-1)/(y+1), sqrt(156324)*u/x)`
+         *   - `(x, y) = (sqrt(156324)*u/v, (1+u)/(1-u))`
+         */
+        toMontgomery(publicKey) {
+            const { y } = Point.fromBytes(publicKey);
+            const size = lengths.publicKey;
+            const is25519 = size === 32;
+            if (!is25519 && size !== 57)
+                throw new Error('only defined for 25519 and 448');
+            const u = is25519 ? Fp.div(edwards_1n + y, edwards_1n - y) : Fp.div(y - edwards_1n, y + edwards_1n);
+            return Fp.toBytes(u);
+        },
+        toMontgomerySecret(secretKey) {
+            const size = lengths.secretKey;
+            curves_utils_abytes(secretKey, size);
+            const hashed = hash(secretKey.subarray(0, size));
+            return adjustScalarBytes(hashed).subarray(0, size);
+        },
+    };
+    Object.freeze(lengths);
+    Object.freeze(utils);
+    return Object.freeze({
+        keygen: createKeygen(randomSecretKey, getPublicKey),
+        getPublicKey,
+        sign,
+        verify,
+        utils,
+        Point,
+        lengths,
+    });
+}
+//# sourceMappingURL=edwards.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/curves/abstract/hash-to-curve.js
+
+
+// Octet Stream to Integer. "spec" implementation of os2ip is 2.5x slower vs bytesToNumberBE.
+const os2ip = (/* unused pure expression or super */ null && (bytesToNumberBE));
+// Integer to Octet Stream (numberToBytesBE).
+function i2osp(value, length) {
+    utils_asafenumber(value);
+    utils_asafenumber(length);
+    // This helper stays on the JS bitwise/u32 fast-path. Callers that need wider encodings should
+    // use bigint + numberToBytesBE instead of routing large widths through this small helper.
+    if (length < 0 || length > 4)
+        throw new Error('invalid I2OSP length: ' + length);
+    if (value < 0 || value > 2 ** (8 * length) - 1)
+        throw new Error('invalid I2OSP input: ' + value);
+    const res = Array.from({ length }).fill(0);
+    for (let i = length - 1; i >= 0; i--) {
+        res[i] = value & 0xff;
+        value >>>= 8;
+    }
+    return new Uint8Array(res);
+}
+// RFC 9380 only applies strxor() to equal-length strings; callers must preserve that invariant.
+function strxor(a, b) {
+    const arr = new Uint8Array(a.length);
+    for (let i = 0; i < a.length; i++) {
+        arr[i] = a[i] ^ b[i];
+    }
+    return arr;
+}
+// User can always use utf8 if they want, by passing Uint8Array.
+// If string is passed, we treat it as ASCII: other formats are likely a mistake.
+function normDST(DST) {
+    if (!curves_utils_isBytes(DST) && typeof DST !== 'string')
+        throw new Error('DST must be Uint8Array or ascii string');
+    const dst = typeof DST === 'string' ? utils_asciiToBytes(DST) : DST;
+    // RFC 9380 §3.1 requirement 2: tags "MUST have nonzero length".
+    if (dst.length === 0)
+        throw new Error('DST must be non-empty');
+    return dst;
+}
+/**
+ * Produces a uniformly random byte string using a cryptographic hash
+ * function H that outputs b bits.
+ * See {@link https://www.rfc-editor.org/rfc/rfc9380#section-5.3.1 | RFC 9380 section 5.3.1}.
+ * @param msg - Input message.
+ * @param DST - Domain separation tag. This helper normalizes DST, rejects empty DSTs, and
+ *   oversize-hashes DST when needed.
+ * @param lenInBytes - Output length.
+ * @param H - Hash function.
+ * @returns Uniform byte string.
+ * @throws If the message, DST, hash, or output length is invalid. {@link Error}
+ * @example
+ * Expand one message into uniform bytes with the XMD construction.
+ *
+ * ```ts
+ * import { expand_message_xmd } from '@noble/curves/abstract/hash-to-curve.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * const uniform = expand_message_xmd(new TextEncoder().encode('hello noble'), 'DST', 32, sha256);
+ * ```
+ */
+function expand_message_xmd(msg, DST, lenInBytes, H) {
+    curves_utils_abytes(msg);
+    utils_asafenumber(lenInBytes);
+    DST = normDST(DST);
+    // https://www.rfc-editor.org/rfc/rfc9380#section-5.3.3
+    if (DST.length > 255)
+        DST = H(curves_utils_concatBytes(utils_asciiToBytes('H2C-OVERSIZE-DST-'), DST));
+    const { outputLen: b_in_bytes, blockLen: r_in_bytes } = H;
+    const ell = Math.ceil(lenInBytes / b_in_bytes);
+    if (lenInBytes > 65535 || ell > 255)
+        throw new Error('expand_message_xmd: invalid lenInBytes');
+    const DST_prime = curves_utils_concatBytes(DST, i2osp(DST.length, 1));
+    const Z_pad = new Uint8Array(r_in_bytes); // RFC 9380: Z_pad = I2OSP(0, s_in_bytes)
+    const l_i_b_str = i2osp(lenInBytes, 2); // len_in_bytes_str
+    const b = new Array(ell);
+    const b_0 = H(curves_utils_concatBytes(Z_pad, msg, l_i_b_str, i2osp(0, 1), DST_prime));
+    b[0] = H(curves_utils_concatBytes(b_0, i2osp(1, 1), DST_prime));
+    // `b[0]` already stores RFC `b_1`, so only derive `b_2..b_ell` here. The old `<= ell`
+    // loop computed one extra tail block, which was usually sliced away but broke at max `ell=255`
+    // by reaching `I2OSP(256, 1)`.
+    for (let i = 1; i < ell; i++) {
+        const args = [strxor(b_0, b[i - 1]), i2osp(i + 1, 1), DST_prime];
+        b[i] = H(curves_utils_concatBytes(...args));
+    }
+    const pseudo_random_bytes = curves_utils_concatBytes(...b);
+    return pseudo_random_bytes.slice(0, lenInBytes);
+}
+/**
+ * Produces a uniformly random byte string using an extendable-output function (XOF) H.
+ * 1. The collision resistance of H MUST be at least k bits.
+ * 2. H MUST be an XOF that has been proved indifferentiable from
+ *    a random oracle under a reasonable cryptographic assumption.
+ * See {@link https://www.rfc-editor.org/rfc/rfc9380#section-5.3.2 | RFC 9380 section 5.3.2}.
+ * @param msg - Input message.
+ * @param DST - Domain separation tag. This helper normalizes DST, rejects empty DSTs, and
+ *   oversize-hashes DST when needed.
+ * @param lenInBytes - Output length.
+ * @param k - Target security level.
+ * @param H - XOF hash function.
+ * @returns Uniform byte string.
+ * @throws If the message, DST, XOF, or output length is invalid. {@link Error}
+ * @example
+ * Expand one message into uniform bytes with the XOF construction.
+ *
+ * ```ts
+ * import { expand_message_xof } from '@noble/curves/abstract/hash-to-curve.js';
+ * import { shake256 } from '@noble/hashes/sha3.js';
+ * const uniform = expand_message_xof(
+ *   new TextEncoder().encode('hello noble'),
+ *   'DST',
+ *   32,
+ *   128,
+ *   shake256
+ * );
+ * ```
+ */
+function expand_message_xof(msg, DST, lenInBytes, k, H) {
+    abytes(msg);
+    asafenumber(lenInBytes);
+    DST = normDST(DST);
+    // https://www.rfc-editor.org/rfc/rfc9380#section-5.3.3
+    // RFC 9380 §5.3.3: DST = H("H2C-OVERSIZE-DST-" || a_very_long_DST, ceil(2 * k / 8)).
+    if (DST.length > 255) {
+        const dkLen = Math.ceil((2 * k) / 8);
+        DST = H.create({ dkLen }).update(asciiToBytes('H2C-OVERSIZE-DST-')).update(DST).digest();
+    }
+    if (lenInBytes > 65535 || DST.length > 255)
+        throw new Error('expand_message_xof: invalid lenInBytes');
+    return (H.create({ dkLen: lenInBytes })
+        .update(msg)
+        .update(i2osp(lenInBytes, 2))
+        // 2. DST_prime = DST || I2OSP(len(DST), 1)
+        .update(DST)
+        .update(i2osp(DST.length, 1))
+        .digest());
+}
+/**
+ * Hashes arbitrary-length byte strings to a list of one or more elements of a finite field F.
+ * See {@link https://www.rfc-editor.org/rfc/rfc9380#section-5.2 | RFC 9380 section 5.2}.
+ * @param msg - Input message bytes.
+ * @param count - Number of field elements to derive. Must be `>= 1`.
+ * @param options - RFC 9380 options. See {@link H2COpts}. `m` must be `>= 1`.
+ * @returns `[u_0, ..., u_(count - 1)]`, a list of field elements.
+ * @throws If the expander choice or RFC 9380 options are invalid. {@link Error}
+ * @example
+ * Hash one message into field elements before mapping it onto a curve.
+ *
+ * ```ts
+ * import { hash_to_field } from '@noble/curves/abstract/hash-to-curve.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * const scalars = hash_to_field(new TextEncoder().encode('hello noble'), 2, {
+ *   DST: 'DST',
+ *   p: 17n,
+ *   m: 1,
+ *   k: 128,
+ *   expand: 'xmd',
+ *   hash: sha256,
+ * });
+ * ```
+ */
+function hash_to_field(msg, count, options) {
+    validateObject(options, {
+        p: 'bigint',
+        m: 'number',
+        k: 'number',
+        hash: 'function',
+    });
+    const { p, k, m, hash, expand, DST } = options;
+    asafenumber(hash.outputLen, 'valid hash');
+    abytes(msg);
+    asafenumber(count);
+    // RFC 9380 §5.2 defines hash_to_field over a list of one or more field elements and requires
+    // extension degree `m >= 1`; rejecting here avoids degenerate `[]` / `[[]]` helper outputs.
+    if (count < 1)
+        throw new Error('hash_to_field: expected count >= 1');
+    if (m < 1)
+        throw new Error('hash_to_field: expected m >= 1');
+    const log2p = p.toString(2).length;
+    const L = Math.ceil((log2p + k) / 8); // section 5.1 of ietf draft link above
+    const len_in_bytes = count * m * L;
+    let prb; // pseudo_random_bytes
+    if (expand === 'xmd') {
+        prb = expand_message_xmd(msg, DST, len_in_bytes, hash);
+    }
+    else if (expand === 'xof') {
+        prb = expand_message_xof(msg, DST, len_in_bytes, k, hash);
+    }
+    else if (expand === '_internal_pass') {
+        // for internal tests only
+        prb = msg;
+    }
+    else {
+        throw new Error('expand must be "xmd" or "xof"');
+    }
+    const u = new Array(count);
+    for (let i = 0; i < count; i++) {
+        const e = new Array(m);
+        for (let j = 0; j < m; j++) {
+            const elm_offset = L * (j + i * m);
+            const tv = prb.subarray(elm_offset, elm_offset + L);
+            e[j] = mod(os2ip(tv), p);
+        }
+        u[i] = e;
+    }
+    return u;
+}
+/**
+ * @param field - Field implementation.
+ * @param map - Isogeny coefficients.
+ * @returns Isogeny mapping helper.
+ * @example
+ * Build one rational isogeny map, then apply it to affine x/y coordinates.
+ *
+ * ```ts
+ * import { isogenyMap } from '@noble/curves/abstract/hash-to-curve.js';
+ * import { Field } from '@noble/curves/abstract/modular.js';
+ * const Fp = Field(17n);
+ * const iso = isogenyMap(Fp, [[0n, 1n], [1n], [1n], [1n]]);
+ * const point = iso(3n, 5n);
+ * ```
+ */
+function isogenyMap(field, map) {
+    // Make same order as in spec
+    const coeff = map.map((i) => Array.from(i).reverse());
+    return (x, y) => {
+        const [xn, xd, yn, yd] = coeff.map((val) => val.reduce((acc, i) => field.add(field.mul(acc, x), i)));
+        // RFC 9380 §6.6.3 / Appendix E: denominator-zero exceptional cases must
+        // return the identity on E.
+        // Shipped Weierstrass consumers encode that affine identity as all-zero
+        // coordinates, so `passZero=true` intentionally collapses zero
+        // denominators to `{ x: 0, y: 0 }`.
+        const [xd_inv, yd_inv] = FpInvertBatch(field, [xd, yd], true);
+        x = field.mul(xn, xd_inv); // xNum / xDen
+        y = field.mul(y, field.mul(yn, yd_inv)); // y * (yNum / yDev)
+        return { x, y };
+    };
+}
+// Keep the shared DST removable when the selected bundle never hashes to scalar.
+// Callers that need protocol-specific scalar domain separation must override this generic default.
+// RFC 9497 §§4.1-4.5 use this ASCII prefix before appending the ciphersuite context string.
+// Export a string instead of mutable bytes so callers cannot poison default hash-to-scalar behavior
+// by mutating a shared Uint8Array in place.
+const _DST_scalar = 'HashToScalar-';
+/**
+ * Creates hash-to-curve methods from EC Point and mapToCurve function. See {@link H2CHasher}.
+ * @param Point - Point constructor.
+ * @param mapToCurve - Map-to-curve function.
+ * @param defaults - Default hash-to-curve options. This object is frozen in place and reused as
+ *   the shared defaults bundle for the returned helpers.
+ * @returns Hash-to-curve helper namespace.
+ * @throws If the map-to-curve callback or default hash-to-curve options are invalid. {@link Error}
+ * @example
+ * Bundle hash-to-curve, hash-to-scalar, and encode-to-curve helpers for one curve.
+ *
+ * ```ts
+ * import { createHasher } from '@noble/curves/abstract/hash-to-curve.js';
+ * import { p256 } from '@noble/curves/nist.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * const hasher = createHasher(p256.Point, () => p256.Point.BASE.toAffine(), {
+ *   DST: 'P256_XMD:SHA-256_SSWU_RO_',
+ *   encodeDST: 'P256_XMD:SHA-256_SSWU_NU_',
+ *   p: p256.Point.Fp.ORDER,
+ *   m: 1,
+ *   k: 128,
+ *   expand: 'xmd',
+ *   hash: sha256,
+ * });
+ * const point = hasher.encodeToCurve(new TextEncoder().encode('hello noble'));
+ * ```
+ */
+function hash_to_curve_createHasher(Point, mapToCurve, defaults) {
+    if (typeof mapToCurve !== 'function')
+        throw new Error('mapToCurve() must be defined');
+    // `Point` is intentionally not shape-validated eagerly here: point constructors vary across
+    // curve families, so this helper only checks the hooks it can validate cheaply. Misconfigured
+    // suites fail later when hashing first touches Point.fromAffine / Point.ZERO / clearCofactor().
+    const snapshot = (src) => Object.freeze({
+        ...src,
+        DST: isBytes(src.DST) ? copyBytes(src.DST) : src.DST,
+        ...(src.encodeDST === undefined
+            ? {}
+            : { encodeDST: isBytes(src.encodeDST) ? copyBytes(src.encodeDST) : src.encodeDST }),
+    });
+    // Keep one private defaults snapshot for actual hashing and expose fresh
+    // detached snapshots via the public getter.
+    // Otherwise a caller could mutate `hasher.defaults.DST` in place and poison
+    // the singleton hasher for every other consumer in the same process.
+    const safeDefaults = snapshot(defaults);
+    function map(num) {
+        return Point.fromAffine(mapToCurve(num));
+    }
+    function clear(initial) {
+        const P = initial.clearCofactor();
+        // Keep ZERO as the algebraic cofactor-clearing result here; strict public point-validity
+        // surfaces may still reject it later, but createHasher.clear() itself is not that boundary.
+        if (P.equals(Point.ZERO))
+            return Point.ZERO;
+        P.assertValidity();
+        return P;
+    }
+    return Object.freeze({
+        get defaults() {
+            return snapshot(safeDefaults);
+        },
+        Point,
+        hashToCurve(msg, options) {
+            const opts = Object.assign({}, safeDefaults, options);
+            const u = hash_to_field(msg, 2, opts);
+            const u0 = map(u[0]);
+            const u1 = map(u[1]);
+            return clear(u0.add(u1));
+        },
+        encodeToCurve(msg, options) {
+            const optsDst = safeDefaults.encodeDST ? { DST: safeDefaults.encodeDST } : {};
+            const opts = Object.assign({}, safeDefaults, optsDst, options);
+            const u = hash_to_field(msg, 1, opts);
+            const u0 = map(u[0]);
+            return clear(u0);
+        },
+        /** See {@link H2CHasher} */
+        mapToCurve(scalars) {
+            // Curves with m=1 accept only single scalar
+            if (safeDefaults.m === 1) {
+                if (typeof scalars !== 'bigint')
+                    throw new Error('expected bigint (m=1)');
+                return clear(map([scalars]));
+            }
+            if (!Array.isArray(scalars))
+                throw new Error('expected array of bigints');
+            for (const i of scalars)
+                if (typeof i !== 'bigint')
+                    throw new Error('expected array of bigints');
+            return clear(map(scalars));
+        },
+        // hash_to_scalar can produce 0: https://www.rfc-editor.org/errata/eid8393
+        // RFC 9380, draft-irtf-cfrg-bbs-signatures-08. Default scalar DST is the shared generic
+        // `HashToScalar-` prefix above unless the caller overrides it per invocation.
+        hashToScalar(msg, options) {
+            // @ts-ignore
+            const N = Point.Fn.ORDER;
+            const opts = Object.assign({}, safeDefaults, { p: N, m: 1, DST: _DST_scalar }, options);
+            return hash_to_field(msg, 1, opts)[0][0];
+        },
+    });
+}
+//# sourceMappingURL=hash-to-curve.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/curves/abstract/montgomery.js
+/**
+ * Montgomery curve methods. It's not really whole montgomery curve,
+ * just bunch of very specific methods for X25519 / X448 from
+ * [RFC 7748](https://www.rfc-editor.org/rfc/rfc7748)
+ * @module
+ */
+/*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+
+
+
+const montgomery_0n = BigInt(0);
+const montgomery_1n = BigInt(1);
+const montgomery_2n = BigInt(2);
+function validateOpts(curve) {
+    // Validate constructor config eagerly, but do not call user-provided hooks here:
+    // `randomBytes` may be transcript-backed or otherwise contextual. Runtime type checks are
+    // enough to fail fast on malformed configs without consuming user state.
+    utils_validateObject(curve, {
+        P: 'bigint',
+        type: 'string',
+        adjustScalarBytes: 'function',
+        powPminus2: 'function',
+    }, {
+        randomBytes: 'function',
+    });
+    return Object.freeze({ ...curve });
+}
+/**
+ * @param curveDef - Montgomery curve definition.
+ * @returns ECDH helper namespace.
+ * @throws If the curve definition or derived shared point is invalid. {@link Error}
+ * @example
+ * Perform one X25519 key exchange through the generic Montgomery helper.
+ *
+ * ```ts
+ * import { x25519 } from '@noble/curves/ed25519.js';
+ * const alice = x25519.keygen();
+ * const shared = x25519.getSharedSecret(alice.secretKey, alice.publicKey);
+ * ```
+ */
+function montgomery(curveDef) {
+    const CURVE = validateOpts(curveDef);
+    const { P, type, adjustScalarBytes, powPminus2, randomBytes: rand } = CURVE;
+    const is25519 = type === 'x25519';
+    if (!is25519 && type !== 'x448')
+        throw new Error('invalid type');
+    const randomBytes_ = rand === undefined ? curves_utils_randomBytes : rand;
+    const montgomeryBits = is25519 ? 255 : 448;
+    const fieldLen = is25519 ? 32 : 56;
+    const Gu = is25519 ? BigInt(9) : BigInt(5);
+    // RFC 7748 #5:
+    // The constant a24 is (486662 - 2) / 4 = 121665 for curve25519/X25519 and
+    // (156326 - 2) / 4 = 39081 for curve448/X448
+    // const a = is25519 ? 486662n : 156326n;
+    const a24 = is25519 ? BigInt(121665) : BigInt(39081);
+    // RFC: x25519 "the resulting integer is of the form 2^254 plus
+    // eight times a value between 0 and 2^251 - 1 (inclusive)"
+    // x448: "2^447 plus four times a value between 0 and 2^445 - 1 (inclusive)"
+    const minScalar = is25519 ? montgomery_2n ** BigInt(254) : montgomery_2n ** BigInt(447);
+    const maxAdded = is25519
+        ? BigInt(8) * montgomery_2n ** BigInt(251) - montgomery_1n
+        : BigInt(4) * montgomery_2n ** BigInt(445) - montgomery_1n;
+    const maxScalar = minScalar + maxAdded + montgomery_1n; // (inclusive)
+    const modP = (n) => modular_mod(n, P);
+    const GuBytes = encodeU(Gu);
+    function encodeU(u) {
+        return utils_numberToBytesLE(modP(u), fieldLen);
+    }
+    function decodeU(u) {
+        const _u = curves_utils_copyBytes(curves_utils_abytes(u, fieldLen, 'uCoordinate'));
+        // RFC: When receiving such an array, implementations of X25519
+        // (but not X448) MUST mask the most significant bit in the final byte.
+        if (is25519)
+            _u[31] &= 127; // 0b0111_1111
+        // RFC: Implementations MUST accept non-canonical values and process them as
+        // if they had been reduced modulo the field prime.  The non-canonical
+        // values are 2^255 - 19 through 2^255 - 1 for X25519 and 2^448 - 2^224
+        // - 1 through 2^448 - 1 for X448.
+        return modP(utils_bytesToNumberLE(_u));
+    }
+    function decodeScalar(scalar) {
+        return utils_bytesToNumberLE(adjustScalarBytes(curves_utils_copyBytes(curves_utils_abytes(scalar, fieldLen, 'scalar'))));
+    }
+    function scalarMult(scalar, u) {
+        const pu = montgomeryLadder(decodeU(u), decodeScalar(scalar));
+        // Some public keys are useless, of low-order. Curve author doesn't think
+        // it needs to be validated, but we do it nonetheless.
+        // https://cr.yp.to/ecdh.html#validate
+        if (pu === montgomery_0n)
+            throw new Error('invalid private or public key received');
+        return encodeU(pu);
+    }
+    // Computes public key from private. By doing scalar multiplication of base point.
+    function scalarMultBase(scalar) {
+        return scalarMult(scalar, GuBytes);
+    }
+    const getPublicKey = scalarMultBase;
+    const getSharedSecret = scalarMult;
+    // cswap from RFC7748 "example code"
+    function cswap(swap, x_2, x_3) {
+        // dummy = mask(swap) AND (x_2 XOR x_3)
+        // Where mask(swap) is the all-1 or all-0 word of the same length as x_2
+        // and x_3, computed, e.g., as mask(swap) = 0 - swap.
+        const dummy = modP(swap * (x_2 - x_3));
+        x_2 = modP(x_2 - dummy); // x_2 = x_2 XOR dummy
+        x_3 = modP(x_3 + dummy); // x_3 = x_3 XOR dummy
+        return { x_2, x_3 };
+    }
+    /**
+     * Montgomery x-only multiplication ladder for the selected X25519/X448 curve.
+     * @param pointU - decoded Montgomery u coordinate for the selected curve
+     * @param scalar - decoded clamped scalar by which the point is multiplied
+     * @returns resulting Montgomery u coordinate for the selected curve
+     */
+    function montgomeryLadder(u, scalar) {
+        aInRange('u', u, montgomery_0n, P);
+        aInRange('scalar', scalar, minScalar, maxScalar);
+        const k = scalar;
+        const x_1 = u;
+        let x_2 = montgomery_1n;
+        let z_2 = montgomery_0n;
+        let x_3 = u;
+        let z_3 = montgomery_1n;
+        let swap = montgomery_0n;
+        for (let t = BigInt(montgomeryBits - 1); t >= montgomery_0n; t--) {
+            const k_t = (k >> t) & montgomery_1n;
+            swap ^= k_t;
+            ({ x_2, x_3 } = cswap(swap, x_2, x_3));
+            ({ x_2: z_2, x_3: z_3 } = cswap(swap, z_2, z_3));
+            swap = k_t;
+            const A = x_2 + z_2;
+            const AA = modP(A * A);
+            const B = x_2 - z_2;
+            const BB = modP(B * B);
+            const E = AA - BB;
+            const C = x_3 + z_3;
+            const D = x_3 - z_3;
+            const DA = modP(D * A);
+            const CB = modP(C * B);
+            const dacb = DA + CB;
+            const da_cb = DA - CB;
+            x_3 = modP(dacb * dacb);
+            z_3 = modP(x_1 * modP(da_cb * da_cb));
+            x_2 = modP(AA * BB);
+            z_2 = modP(E * (AA + modP(a24 * E)));
+        }
+        ({ x_2, x_3 } = cswap(swap, x_2, x_3));
+        ({ x_2: z_2, x_3: z_3 } = cswap(swap, z_2, z_3));
+        const z2 = powPminus2(z_2); // `Fp.pow(x, P - _2n)` is much slower equivalent
+        return modP(x_2 * z2); // Return x_2 * (z_2^(p - 2))
+    }
+    const lengths = {
+        secretKey: fieldLen,
+        publicKey: fieldLen,
+        seed: fieldLen,
+    };
+    const randomSecretKey = (seed) => {
+        seed = seed === undefined ? randomBytes_(fieldLen) : seed;
+        curves_utils_abytes(seed, lengths.seed, 'seed');
+        // Reuse caller-supplied seed bytes verbatim; clamping is deferred until
+        // decodeScalar(...) when the secret key is actually used.
+        return seed;
+    };
+    const utils = { randomSecretKey };
+    Object.freeze(lengths);
+    Object.freeze(utils);
+    return Object.freeze({
+        keygen: createKeygen(randomSecretKey, getPublicKey),
+        getSharedSecret,
+        getPublicKey,
+        scalarMult,
+        scalarMultBase,
+        utils,
+        GuBytes: GuBytes.slice(),
+        lengths,
+    });
+}
+//# sourceMappingURL=montgomery.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/curves/ed25519.js
+/**
+ * ed25519 Twisted Edwards curve with following addons:
+ * - X25519 ECDH
+ * - Ristretto cofactor elimination
+ * - Elligator hash-to-group / point indistinguishability
+ * @module
+ */
+/*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+
+
+
+
+
+
+
+
+
+
+// prettier-ignore
+const ed25519_0n = /* @__PURE__ */ BigInt(0), ed25519_1n = /* @__PURE__ */ BigInt(1), ed25519_2n = /* @__PURE__ */ BigInt(2), ed25519_3n = /* @__PURE__ */ BigInt(3);
+// prettier-ignore
+const ed25519_5n = /* @__PURE__ */ BigInt(5), ed25519_8n = /* @__PURE__ */ BigInt(8);
+// P = 2n**255n - 19n
+const ed25519_CURVE_p = /* @__PURE__ */ BigInt('0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed');
+// N = 2n**252n + 27742317777372353535851937790883648493n
+// a = Fp.create(BigInt(-1))
+// d = -121665/121666 a.k.a. Fp.neg(121665 * Fp.inv(121666))
+const ed25519_CURVE = /* @__PURE__ */ (() => ({
+    p: ed25519_CURVE_p,
+    n: BigInt('0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed'),
+    h: ed25519_8n,
+    a: BigInt('0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffec'),
+    d: BigInt('0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3'),
+    Gx: BigInt('0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51a'),
+    Gy: BigInt('0x6666666666666666666666666666666666666666666666666666666666666658'),
+}))();
+function ed25519_pow_2_252_3(x) {
+    // prettier-ignore
+    const _10n = BigInt(10), _20n = BigInt(20), _40n = BigInt(40), _80n = BigInt(80);
+    const P = ed25519_CURVE_p;
+    const x2 = (x * x) % P;
+    const b2 = (x2 * x) % P; // x^3, 11
+    const b4 = (pow2(b2, ed25519_2n, P) * b2) % P; // x^15, 1111
+    const b5 = (pow2(b4, ed25519_1n, P) * x) % P; // x^31
+    const b10 = (pow2(b5, ed25519_5n, P) * b5) % P;
+    const b20 = (pow2(b10, _10n, P) * b10) % P;
+    const b40 = (pow2(b20, _20n, P) * b20) % P;
+    const b80 = (pow2(b40, _40n, P) * b40) % P;
+    const b160 = (pow2(b80, _80n, P) * b80) % P;
+    const b240 = (pow2(b160, _80n, P) * b80) % P;
+    const b250 = (pow2(b240, _10n, P) * b10) % P;
+    const pow_p_5_8 = (pow2(b250, ed25519_2n, P) * x) % P;
+    // ^ This is x^((p-5)/8); multiply by x once more to get x^((p+3)/8).
+    return { pow_p_5_8, b2 };
+}
+// Mutates and returns the provided 32-byte buffer in place.
+function adjustScalarBytes(bytes) {
+    // Section 5: For X25519, in order to decode 32 random bytes as an integer scalar,
+    // set the three least significant bits of the first byte
+    bytes[0] &= 248; // 0b1111_1000
+    // and the most significant bit of the last to zero,
+    bytes[31] &= 127; // 0b0111_1111
+    // set the second most significant bit of the last byte to 1
+    bytes[31] |= 64; // 0b0100_0000
+    return bytes;
+}
+// √(-1) aka √(a) aka 2^((p-1)/4)
+// Fp.sqrt(Fp.neg(1))
+const ED25519_SQRT_M1 = /* @__PURE__ */ BigInt('19681161376707505956807079304988542015446066515923890162744021073123829784752');
+// sqrt(u/v). Returns `{ isValid, value }`; on non-squares `value` is still a
+// dummy root-shaped field element so callers can stay constant-time.
+function uvRatio(u, v) {
+    const P = ed25519_CURVE_p;
+    const v3 = modular_mod(v * v * v, P); // v³
+    const v7 = modular_mod(v3 * v3 * v, P); // v⁷
+    // (p+3)/8 and (p-5)/8
+    const pow = ed25519_pow_2_252_3(u * v7).pow_p_5_8;
+    let x = modular_mod(u * v3 * pow, P); // (uv³)(uv⁷)^(p-5)/8
+    const vx2 = modular_mod(v * x * x, P); // vx²
+    const root1 = x; // First root candidate
+    const root2 = modular_mod(x * ED25519_SQRT_M1, P); // Second root candidate
+    const useRoot1 = vx2 === u; // If vx² = u (mod p), x is a square root
+    const useRoot2 = vx2 === modular_mod(-u, P); // If vx² = -u, set x <-- x * 2^((p-1)/4)
+    const noRoot = vx2 === modular_mod(-u * ED25519_SQRT_M1, P); // There is no valid root, vx² = -u√(-1)
+    if (useRoot1)
+        x = root1;
+    if (useRoot2 || noRoot)
+        x = root2; // We return root2 anyway, for const-time
+    if (isNegativeLE(x, P))
+        x = modular_mod(-x, P);
+    return { isValid: useRoot1 || useRoot2, value: x };
+}
+const ed25519_Point = /* @__PURE__ */ edwards(ed25519_CURVE, { uvRatio });
+// Public field alias stays stricter than the RFC 8032 Appendix A sample code:
+// `Fp.inv(0)` throws instead of returning `0`.
+const Fp = /* @__PURE__ */ (() => ed25519_Point.Fp)();
+const Fn = /* @__PURE__ */ (() => ed25519_Point.Fn)();
+// RFC 8032 `dom2` helper for ctx/ph variants only. Plain Ed25519 keeps the
+// empty-domain path in `ed()` and would be wrong if routed through this helper.
+function ed25519_domain(data, ctx, phflag) {
+    if (ctx.length > 255)
+        throw new Error('Context is too big');
+    return utils_concatBytes(utils_asciiToBytes('SigEd25519 no Ed25519 collisions'), new Uint8Array([phflag ? 1 : 0, ctx.length]), ctx, data);
+}
+function ed(opts) {
+    // Ed25519 keeps ZIP-215 default verification semantics for consensus compatibility.
+    return eddsa(ed25519_Point, sha2_sha512, Object.assign({ adjustScalarBytes, zip215: true }, opts));
+}
+/**
+ * ed25519 curve with EdDSA signatures.
+ * Seeded `keygen(seed)` / `utils.randomSecretKey(seed)` reuse the provided
+ * 32-byte seed buffer instead of copying it.
+ * @example
+ * Generate one Ed25519 keypair, sign a message, and verify it.
+ *
+ * ```js
+ * import { ed25519 } from '@noble/curves/ed25519.js';
+ * const { secretKey, publicKey } = ed25519.keygen();
+ * // const publicKey = ed25519.getPublicKey(secretKey);
+ * const msg = new TextEncoder().encode('hello noble');
+ * const sig = ed25519.sign(msg, secretKey);
+ * const isValid = ed25519.verify(sig, msg, publicKey); // ZIP215
+ * // RFC8032 / FIPS 186-5
+ * const isValid2 = ed25519.verify(sig, msg, publicKey, { zip215: false });
+ * ```
+ */
+const ed25519_ed25519 = /* @__PURE__ */ ed({});
+/**
+ * Context version of ed25519 (ctx for domain separation). See {@link ed25519}
+ * Seeded `keygen(seed)` / `utils.randomSecretKey(seed)` reuse the provided
+ * 32-byte seed buffer instead of copying it.
+ * @example
+ * Sign and verify with Ed25519ctx under one explicit context.
+ *
+ * ```ts
+ * const context = new TextEncoder().encode('docs');
+ * const { secretKey, publicKey } = ed25519ctx.keygen();
+ * const msg = new TextEncoder().encode('hello noble');
+ * const sig = ed25519ctx.sign(msg, secretKey, { context });
+ * const isValid = ed25519ctx.verify(sig, msg, publicKey, { context });
+ * ```
+ */
+const ed25519ctx = /* @__PURE__ */ ed({ domain: ed25519_domain });
+/**
+ * Prehashed version of ed25519. See {@link ed25519}
+ * Seeded `keygen(seed)` / `utils.randomSecretKey(seed)` reuse the provided
+ * 32-byte seed buffer instead of copying it.
+ * @example
+ * Use the prehashed Ed25519 variant for one message.
+ *
+ * ```ts
+ * const { secretKey, publicKey } = ed25519ph.keygen();
+ * const msg = new TextEncoder().encode('hello noble');
+ * const sig = ed25519ph.sign(msg, secretKey);
+ * const isValid = ed25519ph.verify(sig, msg, publicKey);
+ * ```
+ */
+const ed25519ph = /* @__PURE__ */ ed({ domain: ed25519_domain, prehash: sha2_sha512 });
+/**
+ * FROST threshold signatures over ed25519. RFC 9591.
+ * @example
+ * Create one trusted-dealer package for 2-of-3 ed25519 signing.
+ *
+ * ```ts
+ * const alice = ed25519_FROST.Identifier.derive('alice@example.com');
+ * const bob = ed25519_FROST.Identifier.derive('bob@example.com');
+ * const carol = ed25519_FROST.Identifier.derive('carol@example.com');
+ * const deal = ed25519_FROST.trustedDealer({ min: 2, max: 3 }, [alice, bob, carol]);
+ * ```
+ */
+const ed25519_FROST = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => createFROST({
+    name: 'FROST-ED25519-SHA512-v1',
+    Point: ed25519_Point,
+    validatePoint: (p) => {
+        p.assertValidity();
+        if (!p.isTorsionFree())
+            throw new Error('bad point: not torsion-free');
+    },
+    hash: sha512,
+    // RFC 9591 keeps H2 undecorated here for RFC 8032 compatibility. In createFROST(),
+    // `H2: ''` becomes an empty DST prefix; the built-in hashToScalar fallback treats
+    // that the same as omitted DST, even though custom hooks can still observe the empty bag.
+    H2: '',
+}))()));
+/**
+ * ECDH using curve25519 aka x25519.
+ * `getSharedSecret()` rejects low-order peer inputs by default, and seeded
+ * `keygen(seed)` reuses the provided 32-byte seed buffer instead of copying it.
+ * @example
+ * Derive one shared secret between two X25519 peers.
+ *
+ * ```js
+ * import { x25519 } from '@noble/curves/ed25519.js';
+ * const alice = x25519.keygen();
+ * const bob = x25519.keygen();
+ * const shared = x25519.getSharedSecret(alice.secretKey, bob.publicKey);
+ * ```
+ */
+const x25519 = /* @__PURE__ */ (() => {
+    const P = ed25519_CURVE_p;
+    return montgomery({
+        P,
+        type: 'x25519',
+        powPminus2: (x) => {
+            // x^(p-2) aka x^(2^255-21)
+            const { pow_p_5_8, b2 } = ed25519_pow_2_252_3(x);
+            return modular_mod(pow2(pow_p_5_8, ed25519_3n, P) * b2, P);
+        },
+        adjustScalarBytes,
+    });
+})();
+// Hash To Curve Elligator2 Map (NOTE: different from ristretto255 elligator)
+// RFC 9380 Appendix G.2.2 / Err4730 requires `sgn0(c1) = 0` for the Edwards
+// map constant below, so use the even root explicitly.
+// 1. c1 = (q + 3) / 8 # Integer arithmetic
+const ELL2_C1 = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => (ed25519_CURVE_p + ed25519_3n) / ed25519_8n)()));
+const ELL2_C2 = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => Fp.pow(ed25519_2n, ELL2_C1))())); // 2. c2 = 2^c1
+const ELL2_C3 = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => Fp.sqrt(Fp.neg(Fp.ONE)))())); // 3. c3 = sqrt(-1)
+/**
+ * RFC 9380 method `map_to_curve_elligator2_curve25519`. Experimental name: may be renamed later.
+ * @private
+ */
+// prettier-ignore
+function _map_to_curve_elligator2_curve25519(u) {
+    const ELL2_C4 = (ed25519_CURVE_p - ed25519_5n) / ed25519_8n; // 4. c4 = (q - 5) / 8       # Integer arithmetic
+    const ELL2_J = BigInt(486662);
+    let tv1 = Fp.sqr(u); //  1.  tv1 = u^2
+    tv1 = Fp.mul(tv1, ed25519_2n); //  2.  tv1 = 2 * tv1
+    // 3. xd = tv1 + 1 # Nonzero: -1 is square (mod p), tv1 is not
+    let xd = Fp.add(tv1, Fp.ONE);
+    let x1n = Fp.neg(ELL2_J); //  4.  x1n = -J              # x1 = x1n / xd = -J / (1 + 2 * u^2)
+    let tv2 = Fp.sqr(xd); //  5.  tv2 = xd^2
+    let gxd = Fp.mul(tv2, xd); //  6.  gxd = tv2 * xd        # gxd = xd^3
+    let gx1 = Fp.mul(tv1, ELL2_J); //  7.  gx1 = J * tv1         # x1n + J * xd
+    gx1 = Fp.mul(gx1, x1n); //  8.  gx1 = gx1 * x1n       # x1n^2 + J * x1n * xd
+    gx1 = Fp.add(gx1, tv2); //  9.  gx1 = gx1 + tv2       # x1n^2 + J * x1n * xd + xd^2
+    gx1 = Fp.mul(gx1, x1n); //  10. gx1 = gx1 * x1n       # x1n^3 + J * x1n^2 * xd + x1n * xd^2
+    let tv3 = Fp.sqr(gxd); //  11. tv3 = gxd^2
+    tv2 = Fp.sqr(tv3); //  12. tv2 = tv3^2           # gxd^4
+    tv3 = Fp.mul(tv3, gxd); //  13. tv3 = tv3 * gxd       # gxd^3
+    tv3 = Fp.mul(tv3, gx1); //  14. tv3 = tv3 * gx1       # gx1 * gxd^3
+    tv2 = Fp.mul(tv2, tv3); //  15. tv2 = tv2 * tv3       # gx1 * gxd^7
+    let y11 = Fp.pow(tv2, ELL2_C4); //  16. y11 = tv2^c4        # (gx1 * gxd^7)^((p - 5) / 8)
+    y11 = Fp.mul(y11, tv3); //  17. y11 = y11 * tv3       # gx1*gxd^3*(gx1*gxd^7)^((p-5)/8)
+    let y12 = Fp.mul(y11, ELL2_C3); //  18. y12 = y11 * c3
+    tv2 = Fp.sqr(y11); //  19. tv2 = y11^2
+    tv2 = Fp.mul(tv2, gxd); //  20. tv2 = tv2 * gxd
+    let e1 = Fp.eql(tv2, gx1); //  21.  e1 = tv2 == gx1
+    // 22. y1 = CMOV(y12, y11, e1) # If g(x1) is square, this is its sqrt
+    let y1 = Fp.cmov(y12, y11, e1);
+    let x2n = Fp.mul(x1n, tv1); //  23. x2n = x1n * tv1       # x2 = x2n / xd = 2 * u^2 * x1n / xd
+    let y21 = Fp.mul(y11, u); //  24. y21 = y11 * u
+    y21 = Fp.mul(y21, ELL2_C2); //  25. y21 = y21 * c2
+    let y22 = Fp.mul(y21, ELL2_C3); //  26. y22 = y21 * c3
+    let gx2 = Fp.mul(gx1, tv1); //  27. gx2 = gx1 * tv1       # g(x2) = gx2 / gxd = 2 * u^2 * g(x1)
+    tv2 = Fp.sqr(y21); //  28. tv2 = y21^2
+    tv2 = Fp.mul(tv2, gxd); //  29. tv2 = tv2 * gxd
+    let e2 = Fp.eql(tv2, gx2); //  30.  e2 = tv2 == gx2
+    // 31. y2 = CMOV(y22, y21, e2) # If g(x2) is square, this is its sqrt
+    let y2 = Fp.cmov(y22, y21, e2);
+    tv2 = Fp.sqr(y1); //  32. tv2 = y1^2
+    tv2 = Fp.mul(tv2, gxd); //  33. tv2 = tv2 * gxd
+    let e3 = Fp.eql(tv2, gx1); //  34.  e3 = tv2 == gx1
+    let xn = Fp.cmov(x2n, x1n, e3); //  35.  xn = CMOV(x2n, x1n, e3)  # If e3, x = x1, else x = x2
+    let y = Fp.cmov(y2, y1, e3); //  36.   y = CMOV(y2, y1, e3)    # If e3, y = y1, else y = y2
+    let e4 = Fp.isOdd(y); //  37.  e4 = sgn0(y) == 1        # Fix sign of y
+    y = Fp.cmov(y, Fp.neg(y), e3 !== e4); //  38.   y = CMOV(y, -y, e3 XOR e4)
+    return { xMn: xn, xMd: xd, yMn: y, yMd: ed25519_1n }; //  39. return (xn, xd, y, 1)
+}
+// sgn0(c1) MUST equal 0
+const ELL2_C1_EDWARDS = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => FpSqrtEven(Fp, Fp.neg(BigInt(486664))))()));
+function map_to_curve_elligator2_edwards25519(u) {
+    // 1. (xMn, xMd, yMn, yMd) = map_to_curve_elligator2_curve25519(u)
+    const { xMn, xMd, yMn, yMd } = _map_to_curve_elligator2_curve25519(u);
+    // map_to_curve_elligator2_curve25519(u)
+    let xn = Fp.mul(xMn, yMd); //  2.  xn = xMn * yMd
+    xn = Fp.mul(xn, ELL2_C1_EDWARDS); //  3.  xn = xn * c1
+    let xd = Fp.mul(xMd, yMn); //  4.  xd = xMd * yMn    # xn / xd = c1 * xM / yM
+    let yn = Fp.sub(xMn, xMd); //  5.  yn = xMn - xMd
+    // 6. yd = xMn + xMd # (n / d - 1) / (n / d + 1) = (n - d) / (n + d)
+    let yd = Fp.add(xMn, xMd);
+    let tv1 = Fp.mul(xd, yd); //  7. tv1 = xd * yd
+    let e = Fp.eql(tv1, Fp.ZERO); //  8.   e = tv1 == 0
+    xn = Fp.cmov(xn, Fp.ZERO, e); //  9.  xn = CMOV(xn, 0, e)
+    xd = Fp.cmov(xd, Fp.ONE, e); //  10. xd = CMOV(xd, 1, e)
+    yn = Fp.cmov(yn, Fp.ONE, e); //  11. yn = CMOV(yn, 1, e)
+    yd = Fp.cmov(yd, Fp.ONE, e); //  12. yd = CMOV(yd, 1, e)
+    const [xd_inv, yd_inv] = FpInvertBatch(Fp, [xd, yd], true); // batch division
+    // Noble normalizes the RFC rational representation to affine `{ x, y }`
+    // before returning from the internal helper.
+    return { x: Fp.mul(xn, xd_inv), y: Fp.mul(yn, yd_inv) }; //  13. return (xn, xd, yn, yd)
+}
+/**
+ * Hashing to ed25519 points / field. RFC 9380 methods.
+ * Public `mapToCurve()` returns the cofactor-cleared subgroup point; the
+ * internal map callback below consumes one field element bigint, not `[bigint]`.
+ * @example
+ * Hash one message onto the ed25519 curve.
+ *
+ * ```ts
+ * const point = ed25519_hasher.hashToCurve(new TextEncoder().encode('hello noble'));
+ * ```
+ */
+const ed25519_hasher = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => createHasher(ed25519_Point, (scalars) => map_to_curve_elligator2_edwards25519(scalars[0]), {
+    DST: 'edwards25519_XMD:SHA-512_ELL2_RO_',
+    encodeDST: 'edwards25519_XMD:SHA-512_ELL2_NU_',
+    p: ed25519_CURVE_p,
+    m: 1,
+    k: 128,
+    expand: 'xmd',
+    hash: sha512,
+}))()));
+// √(-1) aka √(a) aka 2^((p-1)/4)
+const SQRT_M1 = ED25519_SQRT_M1;
+// √(ad - 1)
+const SQRT_AD_MINUS_ONE = /* @__PURE__ */ BigInt('25063068953384623474111414158702152701244531502492656460079210482610430750235');
+// 1 / √(a-d)
+const INVSQRT_A_MINUS_D = /* @__PURE__ */ BigInt('54469307008909316920995813868745141605393597292927456921205312896311721017578');
+// 1-d²
+const ONE_MINUS_D_SQ = /* @__PURE__ */ BigInt('1159843021668779879193775521855586647937357759715417654439879720876111806838');
+// (d-1)²
+const D_MINUS_ONE_SQ = /* @__PURE__ */ BigInt('40440834346308536858101042469323190826248399146238708352240133220865137265952');
+// `SQRT_RATIO_M1(1, number)` specialization. Returns `{ isValid, value }`,
+// where non-squares get the nonnegative `sqrt(SQRT_M1 / number)` branch.
+const invertSqrt = (number) => uvRatio(ed25519_1n, number);
+const MAX_255B = /* @__PURE__ */ BigInt('0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+// RFC 9496 §4.3.4 MAP parser: masks bit 255 and reduces modulo p for element
+// derivation. The decode path has the opposite contract and rejects that bit.
+const bytes255ToNumberLE = (bytes) => Fp.create(utils_bytesToNumberLE(bytes) & MAX_255B);
+/**
+ * Computes Elligator map for Ristretto255.
+ * Primary formula source is RFC 9496 §4.3.4 MAP; RFC 9380 Appendix B builds
+ * `hash_to_ristretto255` on top of this helper.
+ * Returns an internal Edwards representative, not a public `_RistrettoPoint`.
+ */
+function calcElligatorRistrettoMap(r0) {
+    const { d } = ed25519_CURVE;
+    const P = ed25519_CURVE_p;
+    const mod = (n) => Fp.create(n);
+    const r = mod(SQRT_M1 * r0 * r0); // 1
+    const Ns = mod((r + ed25519_1n) * ONE_MINUS_D_SQ); // 2
+    let c = BigInt(-1); // 3
+    const D = mod((c - d * r) * mod(r + d)); // 4
+    let { isValid: Ns_D_is_sq, value: s } = uvRatio(Ns, D); // 5
+    let s_ = mod(s * r0); // 6
+    if (!isNegativeLE(s_, P))
+        s_ = mod(-s_);
+    if (!Ns_D_is_sq)
+        s = s_; // 7
+    if (!Ns_D_is_sq)
+        c = r; // 8
+    const Nt = mod(c * (r - ed25519_1n) * D_MINUS_ONE_SQ - D); // 9
+    const s2 = s * s;
+    const W0 = mod((s + s) * D); // 10
+    const W1 = mod(Nt * SQRT_AD_MINUS_ONE); // 11
+    const W2 = mod(ed25519_1n - s2); // 12
+    const W3 = mod(ed25519_1n + s2); // 13
+    return new ed25519_Point(mod(W0 * W3), mod(W2 * W1), mod(W1 * W3), mod(W0 * W2));
+}
+/**
+ * Wrapper over Edwards Point for ristretto255.
+ *
+ * Each ed25519/EdwardsPoint has 8 different equivalent points. This can be
+ * a source of bugs for protocols like ring signatures. Ristretto was created to solve this.
+ * Ristretto point operates in X:Y:Z:T extended coordinates like EdwardsPoint,
+ * but it should work in its own namespace: do not combine those two.
+ * See [RFC9496](https://www.rfc-editor.org/rfc/rfc9496).
+ */
+class _RistrettoPoint extends PrimeEdwardsPoint {
+    // Do NOT change syntax: the following gymnastics is done,
+    // because typescript strips comments, which makes bundlers disable tree-shaking.
+    // prettier-ignore
+    static BASE =
+    /* @__PURE__ */ (() => new _RistrettoPoint(ed25519_Point.BASE))();
+    // prettier-ignore
+    static ZERO =
+    /* @__PURE__ */ (() => new _RistrettoPoint(ed25519_Point.ZERO))();
+    // prettier-ignore
+    static Fp =
+    /* @__PURE__ */ (() => Fp)();
+    // prettier-ignore
+    static Fn =
+    /* @__PURE__ */ (() => Fn)();
+    constructor(ep) {
+        super(ep);
+    }
+    /**
+     * Create one Ristretto255 point from affine Edwards coordinates.
+     * This wraps the internal Edwards representative directly and is not a
+     * canonical ristretto255 decoding path.
+     * Use `toBytes()` / `fromBytes()` if canonical ristretto255 bytes matter.
+     */
+    static fromAffine(ap) {
+        return new _RistrettoPoint(ed25519_Point.fromAffine(ap));
+    }
+    assertSame(other) {
+        if (!(other instanceof _RistrettoPoint))
+            throw new Error('RistrettoPoint expected');
+    }
+    init(ep) {
+        return new _RistrettoPoint(ep);
+    }
+    static fromBytes(bytes) {
+        hashes_utils_abytes(bytes, 32);
+        const { a, d } = ed25519_CURVE;
+        const P = ed25519_CURVE_p;
+        const mod = (n) => Fp.create(n);
+        const s = bytes255ToNumberLE(bytes);
+        // 1. Check that s_bytes is the canonical encoding of a field element, or else abort.
+        // 3. Check that s is non-negative, or else abort
+        if (!utils_equalBytes(Fp.toBytes(s), bytes) || isNegativeLE(s, P))
+            throw new Error('invalid ristretto255 encoding 1');
+        const s2 = mod(s * s);
+        const u1 = mod(ed25519_1n + a * s2); // 4 (a is -1)
+        const u2 = mod(ed25519_1n - a * s2); // 5
+        const u1_2 = mod(u1 * u1);
+        const u2_2 = mod(u2 * u2);
+        const v = mod(a * d * u1_2 - u2_2); // 6
+        const { isValid, value: I } = invertSqrt(mod(v * u2_2)); // 7
+        const Dx = mod(I * u2); // 8
+        const Dy = mod(I * Dx * v); // 9
+        let x = mod((s + s) * Dx); // 10
+        if (isNegativeLE(x, P))
+            x = mod(-x); // 10
+        const y = mod(u1 * Dy); // 11
+        const t = mod(x * y); // 12
+        if (!isValid || isNegativeLE(t, P) || y === ed25519_0n)
+            throw new Error('invalid ristretto255 encoding 2');
+        return new _RistrettoPoint(new ed25519_Point(x, y, ed25519_1n, t));
+    }
+    /**
+     * Converts ristretto-encoded string to ristretto point.
+     * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-decode).
+     * @param hex - Ristretto-encoded 32 bytes. Not every 32-byte string is valid ristretto encoding
+     */
+    static fromHex(hex) {
+        return _RistrettoPoint.fromBytes(utils_hexToBytes(hex));
+    }
+    /**
+     * Encodes ristretto point to Uint8Array.
+     * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-encode).
+     */
+    toBytes() {
+        let { X, Y, Z, T } = this.ep;
+        const P = ed25519_CURVE_p;
+        const mod = (n) => Fp.create(n);
+        const u1 = mod(mod(Z + Y) * mod(Z - Y)); // 1
+        const u2 = mod(X * Y); // 2
+        // Square root always exists
+        const u2sq = mod(u2 * u2);
+        const { value: invsqrt } = invertSqrt(mod(u1 * u2sq)); // 3
+        const D1 = mod(invsqrt * u1); // 4
+        const D2 = mod(invsqrt * u2); // 5
+        const zInv = mod(D1 * D2 * T); // 6
+        let D; // 7
+        if (isNegativeLE(T * zInv, P)) {
+            let _x = mod(Y * SQRT_M1);
+            let _y = mod(X * SQRT_M1);
+            X = _x;
+            Y = _y;
+            D = mod(D1 * INVSQRT_A_MINUS_D);
+        }
+        else {
+            D = D2; // 8
+        }
+        if (isNegativeLE(X * zInv, P))
+            Y = mod(-Y); // 9
+        let s = mod((Z - Y) * D); // 10 (check footer's note, no sqrt(-a))
+        if (isNegativeLE(s, P))
+            s = mod(-s);
+        return Fp.toBytes(s); // 11
+    }
+    /**
+     * Compares two Ristretto points.
+     * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-equals).
+     */
+    equals(other) {
+        this.assertSame(other);
+        const { X: X1, Y: Y1 } = this.ep;
+        const { X: X2, Y: Y2 } = other.ep;
+        const mod = (n) => Fp.create(n);
+        // (x1 * y2 == y1 * x2) | (y1 * y2 == x1 * x2)
+        const one = mod(X1 * Y2) === mod(Y1 * X2);
+        const two = mod(Y1 * Y2) === mod(X1 * X2);
+        return one || two;
+    }
+    is0() {
+        return this.equals(_RistrettoPoint.ZERO);
+    }
+}
+Object.freeze(_RistrettoPoint.BASE);
+Object.freeze(_RistrettoPoint.ZERO);
+Object.freeze(_RistrettoPoint.prototype);
+Object.freeze(_RistrettoPoint);
+/** Prime-order Ristretto255 group bundle. */
+const ristretto255 = /* @__PURE__ */ Object.freeze({ Point: _RistrettoPoint });
+/**
+ * Hashing to ristretto255 points / field. RFC 9380 methods.
+ * `hashToCurve()` is RFC 9380 Appendix B, `deriveToCurve()` is the RFC 9496
+ * §4.3.4 element-derivation building block, and `hashToScalar()` is a
+ * library-specific helper for OPRF-style use.
+ * @example
+ * Hash one message onto ristretto255.
+ *
+ * ```ts
+ * const point = ristretto255_hasher.hashToCurve(new TextEncoder().encode('hello noble'));
+ * ```
+ */
+const ristretto255_hasher = Object.freeze({
+    Point: _RistrettoPoint,
+    /**
+    * Spec: https://www.rfc-editor.org/rfc/rfc9380.html#name-hashing-to-ristretto255. Caveats:
+    * * There are no test vectors
+    * * encodeToCurve / mapToCurve is undefined
+    * * mapToCurve would be `calcElligatorRistrettoMap(scalars[0])`, not ristretto255_map!
+    * * hashToScalar is undefined too, so we just use OPRF implementation
+    * * We cannot re-use 'createHasher', because ristretto255_map is different algorithm/RFC
+      (os2ip -> bytes255ToNumberLE)
+    * * mapToCurve == calcElligatorRistrettoMap, hashToCurve == ristretto255_map
+    * * hashToScalar is undefined in RFC9380 for ristretto, so we use the OPRF
+      version here. Using `bytes255ToNumblerLE` will create a different result
+      if we use `bytes255ToNumberLE` as os2ip
+    * * current version is closest to spec.
+    */
+    hashToCurve(msg, options) {
+        // == 'hash_to_ristretto255'
+        // Preserve explicit empty/invalid DST overrides so expand_message_xmd() can reject them.
+        const DST = options?.DST === undefined ? 'ristretto255_XMD:SHA-512_R255MAP_RO_' : options.DST;
+        const xmd = expand_message_xmd(msg, DST, 64, sha2_sha512);
+        // NOTE: RFC 9380 incorrectly calls this function `ristretto255_map`.
+        // In RFC 9496, `map` was the per-point function inside the construction.
+        // That also led to confusion that `ristretto255_map` is `mapToCurve`.
+        // It is not: it is the older hash-to-curve construction.
+        return ristretto255_hasher.deriveToCurve(xmd);
+    },
+    hashToScalar(msg, options = { DST: _DST_scalar }) {
+        const xmd = expand_message_xmd(msg, options.DST, 64, sha2_sha512);
+        return Fn.create(utils_bytesToNumberLE(xmd));
+    },
+    /**
+     * HashToCurve-like construction based on RFC 9496 (Element Derivation).
+     * Converts 64 uniform random bytes into a curve point.
+     *
+     * WARNING: This represents an older hash-to-curve construction from before
+     * RFC 9380 was finalized.
+     * It was later reused as a component in the newer
+     * `hash_to_ristretto255` function defined in RFC 9380.
+     */
+    deriveToCurve(bytes) {
+        // https://www.rfc-editor.org/rfc/rfc9496.html#name-element-derivation
+        hashes_utils_abytes(bytes, 64);
+        const r1 = bytes255ToNumberLE(bytes.subarray(0, 32));
+        const R1 = calcElligatorRistrettoMap(r1);
+        const r2 = bytes255ToNumberLE(bytes.subarray(32, 64));
+        const R2 = calcElligatorRistrettoMap(r2);
+        return new _RistrettoPoint(R1.add(R2));
+    },
+});
+/**
+ * ristretto255 OPRF/VOPRF/POPRF bundle, defined in RFC 9497.
+ * @example
+ * Run one blind/evaluate/finalize OPRF round over ristretto255.
+ *
+ * ```ts
+ * const input = new TextEncoder().encode('hello noble');
+ * const keys = ristretto255_oprf.oprf.generateKeyPair();
+ * const blind = ristretto255_oprf.oprf.blind(input);
+ * const evaluated = ristretto255_oprf.oprf.blindEvaluate(keys.secretKey, blind.blinded);
+ * const output = ristretto255_oprf.oprf.finalize(input, blind.blind, evaluated);
+ * ```
+ */
+const ristretto255_oprf = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => createOPRF({
+    name: 'ristretto255-SHA512',
+    Point: _RistrettoPoint,
+    hash: sha512,
+    hashToGroup: ristretto255_hasher.hashToCurve,
+    hashToScalar: ristretto255_hasher.hashToScalar,
+}))()));
+/**
+ * FROST threshold signatures over ristretto255. RFC 9591.
+ * @example
+ * Create one trusted-dealer package for 2-of-3 ristretto255 signing.
+ *
+ * ```ts
+ * const alice = ristretto255_FROST.Identifier.derive('alice@example.com');
+ * const bob = ristretto255_FROST.Identifier.derive('bob@example.com');
+ * const carol = ristretto255_FROST.Identifier.derive('carol@example.com');
+ * const deal = ristretto255_FROST.trustedDealer({ min: 2, max: 3 }, [alice, bob, carol]);
+ * ```
+ */
+const ristretto255_FROST = /* @__PURE__ */ (/* unused pure expression or super */ null && ((() => createFROST({
+    name: 'FROST-RISTRETTO255-SHA512-v1',
+    Point: _RistrettoPoint,
+    validatePoint: (p) => {
+        // Prime-order wrappers are torsion-free at the abstract-group level.
+        p.assertValidity();
+    },
+    hash: sha512,
+}))()));
+/**
+ * Weird / bogus points, useful for debugging.
+ * All 8 ed25519 points of 8-torsion subgroup can be generated from the point
+ * T = `26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05`.
+ * The subgroup generated by `T` is `{ O, T, 2T, 3T, 4T, 5T, 6T, 7T }`; the
+ * array below is that set, not the powers in that exact index order.
+ * @example
+ * Decode one known torsion point for debugging.
+ *
+ * ```ts
+ * import { ED25519_TORSION_SUBGROUP, ed25519 } from '@noble/curves/ed25519.js';
+ * const point = ed25519.Point.fromHex(ED25519_TORSION_SUBGROUP[1]);
+ * ```
+ */
+const ED25519_TORSION_SUBGROUP = /* @__PURE__ */ (/* unused pure expression or super */ null && (Object.freeze([
+    '0100000000000000000000000000000000000000000000000000000000000000',
+    'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+    '0000000000000000000000000000000000000000000000000000000000000080',
+    '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+    'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+    '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+    '0000000000000000000000000000000000000000000000000000000000000000',
+    'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+])));
+//# sourceMappingURL=ed25519.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/hashes/hmac.js
+/**
+ * HMAC: RFC2104 message authentication code.
+ * @module
+ */
+
+/**
+ * Internal class for HMAC.
+ * Accepts any byte key, although RFC 2104 §3 recommends keys at least
+ * `HashLen` bytes long.
+ */
+class _HMAC {
+    oHash;
+    iHash;
+    blockLen;
+    outputLen;
+    canXOF = false;
+    finished = false;
+    destroyed = false;
+    constructor(hash, key) {
+        ahash(hash);
+        hashes_utils_abytes(key, undefined, 'key');
+        this.iHash = hash.create();
+        if (typeof this.iHash.update !== 'function')
+            throw new Error('Expected instance of class which extends utils.Hash');
+        this.blockLen = this.iHash.blockLen;
+        this.outputLen = this.iHash.outputLen;
+        const blockLen = this.blockLen;
+        const pad = new Uint8Array(blockLen);
+        // blockLen can be bigger than outputLen
+        pad.set(key.length > blockLen ? hash.create().update(key).digest() : key);
+        for (let i = 0; i < pad.length; i++)
+            pad[i] ^= 0x36;
+        this.iHash.update(pad);
+        // By doing update (processing of the first block) of the outer hash here,
+        // we can re-use it between multiple calls via clone.
+        this.oHash = hash.create();
+        // Undo internal XOR && apply outer XOR
+        for (let i = 0; i < pad.length; i++)
+            pad[i] ^= 0x36 ^ 0x5c;
+        this.oHash.update(pad);
+        utils_clean(pad);
+    }
+    update(buf) {
+        utils_aexists(this);
+        this.iHash.update(buf);
+        return this;
+    }
+    digestInto(out) {
+        utils_aexists(this);
+        utils_aoutput(out, this);
+        this.finished = true;
+        const buf = out.subarray(0, this.outputLen);
+        // Reuse the first outputLen bytes for the inner digest; the outer hash consumes them before
+        // overwriting that same prefix with the final tag, leaving any oversized tail untouched.
+        this.iHash.digestInto(buf);
+        this.oHash.update(buf);
+        this.oHash.digestInto(buf);
+        this.destroy();
+    }
+    digest() {
+        const out = new Uint8Array(this.oHash.outputLen);
+        this.digestInto(out);
+        return out;
+    }
+    _cloneInto(to) {
+        // Create new instance without calling constructor since the key
+        // is already in state and we don't know it.
+        to ||= Object.create(Object.getPrototypeOf(this), {});
+        const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
+        to = to;
+        to.finished = finished;
+        to.destroyed = destroyed;
+        to.blockLen = blockLen;
+        to.outputLen = outputLen;
+        to.oHash = oHash._cloneInto(to.oHash);
+        to.iHash = iHash._cloneInto(to.iHash);
+        return to;
+    }
+    clone() {
+        return this._cloneInto();
+    }
+    destroy() {
+        this.destroyed = true;
+        this.oHash.destroy();
+        this.iHash.destroy();
+    }
+}
+const hmac = /* @__PURE__ */ (() => {
+    const hmac_ = ((hash, key, message) => new _HMAC(hash, key).update(message).digest());
+    hmac_.create = (hash, key) => new _HMAC(hash, key);
+    return hmac_;
+})();
+//# sourceMappingURL=hmac.js.map
+;// CONCATENATED MODULE: ./node_modules/@noble/hashes/hkdf.js
+/**
+ * HKDF (RFC 5869): extract + expand in one step.
+ * See {@link https://soatok.blog/2021/11/17/understanding-hkdf/}.
+ * @module
+ */
+
+
+/**
+ * HKDF-extract from spec. Less important part. `HKDF-Extract(IKM, salt) -> PRK`
+ * Arguments position differs from spec (IKM is first one, since it is not optional)
+ * Local validation only checks `hash`; `ikm` / `salt` byte validation is delegated to `hmac()`.
+ * @param hash - hash function that would be used (e.g. sha256)
+ * @param ikm - input keying material, the initial key
+ * @param salt - optional salt value (a non-secret random value)
+ * @returns Pseudorandom key derived from input keying material.
+ * @example
+ * Run the HKDF extract step.
+ * ```ts
+ * import { extract } from '@noble/hashes/hkdf.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * extract(sha256, new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6]));
+ * ```
+ */
+function extract(hash, ikm, salt) {
+    ahash(hash);
+    // NOTE: some libraries treat zero-length array as 'not provided';
+    // we don't, since we have undefined as 'not provided'
+    // https://github.com/RustCrypto/KDFs/issues/15
+    if (salt === undefined)
+        salt = new Uint8Array(hash.outputLen);
+    return hmac(hash, salt, ikm);
+}
+// Shared mutable scratch byte for the RFC 5869 block counter `N`.
+// Safe to reuse because `expand()` is synchronous and resets it with `clean(...)` before returning.
+const HKDF_COUNTER = /* @__PURE__ */ Uint8Array.of(0);
+// Shared RFC 5869 empty string for both `info === undefined` and the first-block `T(0)` input.
+const EMPTY_BUFFER = /* @__PURE__ */ Uint8Array.of();
+/**
+ * HKDF-expand from the spec. The most important part. `HKDF-Expand(PRK, info, L) -> OKM`
+ * @param hash - hash function that would be used (e.g. sha256)
+ * @param prk - a pseudorandom key of at least HashLen octets
+ *   (usually, the output from the extract step)
+ * @param info - optional context and application specific information (can be a zero-length string)
+ * @param length - length of output keying material in bytes.
+ *   RFC 5869 §2.3 allows `0..255*HashLen`, so `0` returns an empty OKM.
+ * @returns Output keying material with the requested length.
+ * @throws If the requested output length exceeds the HKDF limit
+ *   for the selected hash. {@link Error}
+ * @example
+ * Run the HKDF expand step.
+ * ```ts
+ * import { expand } from '@noble/hashes/hkdf.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * expand(sha256, new Uint8Array(32), new Uint8Array([1, 2, 3]), 16);
+ * ```
+ */
+function expand(hash, prk, info, length = 32) {
+    ahash(hash);
+    hashes_utils_anumber(length, 'length');
+    hashes_utils_abytes(prk, undefined, 'prk');
+    const olen = hash.outputLen;
+    // RFC 5869 §2.3: PRK is "a pseudorandom key of at least HashLen octets".
+    if (prk.length < olen)
+        throw new Error('"prk" must be at least HashLen octets');
+    // RFC 5869 §2.3 only bounds `L` by `<= 255*HashLen`; `L=0` is valid and yields empty OKM.
+    if (length > 255 * olen)
+        throw new Error('Length must be <= 255*HashLen');
+    const blocks = Math.ceil(length / olen);
+    if (info === undefined)
+        info = EMPTY_BUFFER;
+    else
+        hashes_utils_abytes(info, undefined, 'info');
+    // first L(ength) octets of T
+    const okm = new Uint8Array(blocks * olen);
+    // Re-use HMAC instance between blocks
+    const HMAC = hmac.create(hash, prk);
+    const HMACTmp = HMAC._cloneInto();
+    const T = new Uint8Array(HMAC.outputLen);
+    for (let counter = 0; counter < blocks; counter++) {
+        HKDF_COUNTER[0] = counter + 1;
+        // T(0) = empty string (zero length)
+        // T(N) = HMAC-Hash(PRK, T(N-1) | info | N)
+        HMACTmp.update(counter === 0 ? EMPTY_BUFFER : T)
+            .update(info)
+            .update(HKDF_COUNTER)
+            .digestInto(T);
+        okm.set(T, olen * counter);
+        HMAC._cloneInto(HMACTmp);
+    }
+    HMAC.destroy();
+    HMACTmp.destroy();
+    utils_clean(T, HKDF_COUNTER);
+    return okm.slice(0, length);
+}
+/**
+ * HKDF (RFC 5869): derive keys from an initial input.
+ * Combines hkdf_extract + hkdf_expand in one step
+ * @param hash - hash function that would be used (e.g. sha256)
+ * @param ikm - input keying material, the initial key
+ * @param salt - optional salt value (a non-secret random value)
+ * @param info - optional context and application specific information bytes
+ * @param length - length of output keying material in bytes.
+ *   RFC 5869 §2.3 allows `0..255*HashLen`, so `0` returns an empty OKM.
+ * @returns Output keying material derived from the input key.
+ * @throws If the requested output length exceeds the HKDF limit
+ *   for the selected hash. {@link Error}
+ * @example
+ * HKDF (RFC 5869): derive keys from an initial input.
+ * ```ts
+ * import { hkdf } from '@noble/hashes/hkdf.js';
+ * import { sha256 } from '@noble/hashes/sha2.js';
+ * import { randomBytes, utf8ToBytes } from '@noble/hashes/utils.js';
+ * const inputKey = randomBytes(32);
+ * const salt = randomBytes(32);
+ * const info = utf8ToBytes('application-key');
+ * const okm = hkdf(sha256, inputKey, salt, info, 32);
+ * ```
+ */
+const hkdf = (hash, ikm, salt, info, length) => expand(hash, extract(hash, ikm, salt), info, length);
+//# sourceMappingURL=hkdf.js.map
+;// CONCATENATED MODULE: ./node_modules/@attomus/semafore-crypto/dist/index.js
+var fe=new TextEncoder,Ke=new TextDecoder("utf-8",{fatal:true});function g(e){return fe.encode(e)}function Q(e){return Ke.decode(e)}function c(e){let r=e.reduce((i,a)=>i+a.length,0),n=new Uint8Array(r),t=0;for(let i of e)n.set(i,t),t+=i.length;return n}function y(e,r,n){if(e.length!==r)throw new RangeError(`${n} must be ${r} bytes; got ${e.length}`)}function L(e,r,n){if(e.length<r)throw new RangeError(`${n} must be at least ${r} bytes; got ${e.length}`)}function u(e,r){if(e.length!==r.length)return  false;let n=0;for(let t=0;t<e.length;t+=1)n|=l(e,t)^l(r,t);return n===0}function M(e){return Array.from(e,r=>r.toString(16).padStart(2,"0")).join("")}function he(e){if(e.length%2!==0)throw new RangeError("hex input must have an even number of characters");if(!/^[0-9a-fA-F]*$/.test(e))throw new RangeError("hex input contains non-hex characters");let r=new Uint8Array(e.length/2);for(let n=0;n<r.length;n+=1)r[n]=Number.parseInt(e.slice(n*2,n*2+2),16);return r}function _(e,r){if(r+4>e.length)throw new RangeError("uint32 read exceeds input length");return (l(e,r)<<24|l(e,r+1)<<16|l(e,r+2)<<8|l(e,r+3))>>>0}function Z(e){if(!Number.isInteger(e)||e<0||e>65535)throw new RangeError("uint16 value is out of range");return new Uint8Array([e>>>8&255,e&255])}function I(e){if(!Number.isInteger(e)||e<0||e>4294967295)throw new RangeError("uint32 value is out of range");return new Uint8Array([e>>>24&255,e>>>16&255,e>>>8&255,e&255])}function R(e,r){if(r+2>e.length)throw new RangeError("length-prefixed string is truncated before length");let n=l(e,r)<<8|l(e,r+1),t=r+2,i=t+n;if(i>e.length)throw new RangeError("length-prefixed string is truncated before value");return {value:Q(e.slice(t,i)),nextOffset:i}}function l(e,r){let n=e[r];if(n===void 0)throw new RangeError("byte offset exceeds input length");return n}function T(e,r){let n=g(e);if(n.length>65535)throw new RangeError(`${r} is too long for uint16 length prefix`);return c([Z(n.length),n])}function S(e){if(!Number.isInteger(e)||e<0)throw new RangeError("random byte length must be a non-negative integer");let r=globalThis.crypto;if(!r?.getRandomValues)throw new Error("crypto.getRandomValues is required");let n=new Uint8Array(e);return r.getRandomValues(n),n}var D=32,p=12,s=32,ee=32,H=32,re=64;function m(){let{publicKey:e,secretKey:r}=x25519.keygen();return {publicKey:e,secretKey:r}}function Pe(e){return y(e,s,"X25519 secret key"),x25519.getPublicKey(e)}function d(e,r){return y(e,s,"X25519 secret key"),y(r,s,"X25519 peer public key"),x25519.getSharedSecret(e,r)}function Ae(){let{publicKey:e,secretKey:r}=ed25519.keygen();return {publicKey:e,secretKey:r}}function Ee(e){return y(e,H,"Ed25519 secret key"),ed25519.getPublicKey(e)}function G(e,r){return y(r,H,"Ed25519 secret key"),ed25519.sign(e,r)}function O(e,r,n){return y(e,re,"Ed25519 signature"),y(n,ee,"Ed25519 public key"),ed25519_ed25519.verify(e,r,n)}function f(e,r,n,t){return hkdf(sha256,e,r,n,t)}function ke(e,r,n){y(e,D,"AES-256-GCM key");let t=S(p);return {nonce:t,ciphertext:gcm(e,t,n).encrypt(r)}}function N(e,r,n,t){return y(e,D,"AES-256-GCM key"),y(r,p,"AES-GCM nonce"),aes_gcm(e,r,t).encrypt(n)}function x(e,r,n,t){return y(e,D,"AES-256-GCM key"),y(r,p,"AES-GCM nonce"),gcm(e,r,t).decrypt(n)}var A=new Uint8Array([83,77,88,49]),P=1,ne=5+s+2+2+p;function V(e){y(e.senderEphemeralPublicKey,s,"SMX1 sender ephemeral public key"),y(e.nonce,p,"SMX1 nonce");let r=e.oneTimePrekeyId,n=r===void 0?0:P;return c([A,new Uint8Array([n]),e.senderEphemeralPublicKey,T(e.signedPrekeyId,"SMX1 signed prekey id"),T(r??"","SMX1 one-time prekey id"),e.nonce,e.ciphertext])}function E(e){if(L(e,ne,"SMX1 envelope"),!u(e.slice(0,4),A))throw new Error("SMX1 envelope magic mismatch");let r=e[4]??0;if((r&~P)!==0)throw new Error("SMX1 envelope contains unsupported flags");let n=e.slice(5,5+s),t=5+s,i=R(e,t);t=i.nextOffset;let a=R(e,t);t=a.nextOffset;let o=(r&P)===P;if(!o&&a.value.length!==0)throw new Error("SMX1 OPK id must be empty when OPK flag is clear");if(o&&a.value.length===0)throw new Error("SMX1 OPK id is required when OPK flag is set");if(t+p>e.length)throw new RangeError("SMX1 nonce is truncated");let h=e.slice(t,t+p);return t+=p,{flags:r,senderEphemeralPublicKey:n,signedPrekeyId:i.value,oneTimePrekeyId:o?a.value:void 0,nonce:h,ciphertext:e.slice(t),headerBytes:e.slice(0,t)}}var F=new Uint8Array([83,77,68,49]),k=56,ae="SemaFore-DR-v1-init",ye="SemaFore-DR-v1-ratchet",oe=new Uint8Array([1]),de=new Uint8Array([2]);function U(e){return y(e.ratchetPublicKey,s,"DR-v1 ratchet public key"),y(e.nonce,12,"DR-v1 nonce"),c([F,e.ratchetPublicKey,I(e.previousChainLength),I(e.messageNumber),e.nonce])}function Y(e){if(e.length<k)throw new RangeError(`DR-v1 frame must be at least ${k} bytes`);if(!u(e.slice(0,4),F))throw new Error("DR-v1 header magic mismatch");return {ratchetPublicKey:e.slice(4,36),previousChainLength:_(e,36),messageNumber:_(e,40),nonce:e.slice(44,56)}}function K(e){return y(e,32,"DR-v1 chain key"),{messageKey:hmac(sha256,e,oe),nextChainKey:hmac(sha256,e,de)}}function Ue(e){return b(e).rootKey}function b(e){let r=f(e,new Uint8Array(32),g(ae),64);return {rootKey:r.slice(0,32),chainKey:r.slice(32,64)}}function v(e,r,n){y(e,32,"DR-v1 root key");let t=d(r,n),i=f(t,e,g(ye),64);return {rootKey:i.slice(0,32),chainKey:i.slice(32,64)}}var be="SemaFore-X3DH-v1",ce="SemaForeX3DHv1",se="SemaFore-X3DH-v1";function pe(e,r){return O(r.signature,r.signatureMessage??r.publicKey,e)}function q(e){return le(e).sharedSecret}function le(e){if(!pe(e.recipientBundle.identitySigningKey,e.recipientBundle.signedPrekey))throw new Error("recipient signed prekey signature is invalid");let r=d(e.senderIdentitySecretKey,e.recipientBundle.signedPrekey.publicKey),n=d(e.senderEphemeralSecretKey,e.recipientBundle.identityAgreementKey),t=d(e.senderEphemeralSecretKey,e.recipientBundle.signedPrekey.publicKey),i=e.recipientBundle.oneTimePrekey===void 0?void 0:d(e.senderEphemeralSecretKey,e.recipientBundle.oneTimePrekey.publicKey),a=c(i===void 0?[r,n,t]:[r,n,t,i]);return {dh1:r,dh2:n,dh3:t,dh4:i,inputKeyMaterial:a,sharedSecret:f(a,e.kdf.salt,e.kdf.info,32)}}function $(e){let r=d(e.receiverSignedPrekey.secretKey,e.senderIdentityPublicKey),n=d(e.receiverIdentitySecretKey,e.senderEphemeralPublicKey),t=d(e.receiverSignedPrekey.secretKey,e.senderEphemeralPublicKey),i=e.receiverOneTimePrekey===void 0?new Uint8Array:d(e.receiverOneTimePrekey.secretKey,e.senderEphemeralPublicKey);return f(c([r,n,t,i]),e.kdf.salt,e.kdf.info,32)}function w(){return ge()}function ge(){return {salt:new Uint8Array(32),info:g(se)}}function ve(){return {salt:g(ce),info:new Uint8Array}}function Me(){return m()}function _e(e,r){let n=m();return {keyId:r,publicKey:n.publicKey,secretKey:n.secretKey,signature:G(n.publicKey,e)}}function Ie(e){let r=m();return {keyId:e,publicKey:r.publicKey,secretKey:r.secretKey}}function Re(e){return {keyId:e.keyId,publicKey:e.publicKey,signature:e.signature}}function Te(e){return {keyId:e.keyId,publicKey:e.publicKey}}function Be(e){let r=e.ephemeralKeyPair??m(),n=q({senderIdentitySecretKey:e.localIdentity.secretKey,senderEphemeralSecretKey:r.secretKey,recipientBundle:e.recipientBundle,kdf:e.kdf??w()}),t=b(n);return {rootKey:t.rootKey,localRatchetKeyPair:r,remoteRatchetPublicKey:e.recipientBundle.signedPrekey.publicKey,sendingChainKey:t.chainKey,sendingMessageNumber:0,receivingMessageNumber:0,previousSendingChainLength:0,skippedMessageKeys:[],pendingPrekey:{signedPrekeyId:e.recipientBundle.signedPrekey.keyId,oneTimePrekeyId:e.recipientBundle.oneTimePrekey?.keyId},maxSkippedMessageKeys:e.maxSkippedMessageKeys??64,randomBytes:e.randomBytes}}function De(e){let r=E(me(e.envelope)),n=e.signedPrekeyLookup(r.signedPrekeyId),t=r.oneTimePrekeyId===void 0?void 0:e.oneTimePrekeyLookup?.(r.oneTimePrekeyId);if(r.oneTimePrekeyId!==void 0&&t===void 0)throw new Error("SMX1 one-time prekey was not found");let i=$({receiverIdentitySecretKey:e.localIdentity.secretKey,senderIdentityPublicKey:e.peerIdentityPublicKey,senderEphemeralPublicKey:r.senderEphemeralPublicKey,receiverSignedPrekey:n,receiverOneTimePrekey:t,kdf:e.kdf??w()}),a=b(i);return {parsedEnvelope:r,session:{rootKey:a.rootKey,localRatchetKeyPair:e.localRatchetKeyPair??m(),remoteRatchetPublicKey:r.senderEphemeralPublicKey,receivingChainKey:a.chainKey,sendingMessageNumber:0,receivingMessageNumber:0,previousSendingChainLength:0,skippedMessageKeys:[],maxSkippedMessageKeys:e.maxSkippedMessageKeys??64}}}function Ne(e,r){let n=typeof r=="string"?new TextEncoder().encode(r):r,t=Ce(e),i=K(t),a=(e.randomBytes??S)(12);e.sendingChainKey=i.nextChainKey;let o=e.pendingPrekey;if(o!==void 0){let z=V({senderEphemeralPublicKey:e.localRatchetKeyPair.publicKey,signedPrekeyId:o.signedPrekeyId,oneTimePrekeyId:o.oneTimePrekeyId,nonce:a,ciphertext:N(i.messageKey,a,n)}),J=E(z);return e.pendingPrekey=void 0,e.sendingMessageNumber+=1,{kind:"smx1",headerBytes:J.headerBytes,ciphertext:J.ciphertext,frameBytes:z}}let h=U({ratchetPublicKey:e.localRatchetKeyPair.publicKey,previousChainLength:e.previousSendingChainLength,messageNumber:e.sendingMessageNumber,nonce:a}),j=N(i.messageKey,a,n,h);return e.sendingMessageNumber+=1,{kind:"smd1",headerBytes:h,ciphertext:j,frameBytes:c([h,j])}}function we(e,r){let n=me(r);if(u(n.slice(0,4),A))return Le(e,E(n));let t=Y(n),i=n.slice(k);return Xe(e,t,i)}function Le(e,r){let n=W(e),t=K(n),i=x(t.messageKey,r.nonce,r.ciphertext);return e.receivingChainKey=t.nextChainKey,e.receivingMessageNumber+=1,i}function Xe(e,r,n){let t=Oe(e,r.ratchetPublicKey,r.messageNumber);if(t!==void 0)return x(t,r.nonce,n,U(r));(!e.remoteRatchetPublicKey||!u(r.ratchetPublicKey,e.remoteRatchetPublicKey))&&(ue(e,r.previousChainLength),He(e,r.ratchetPublicKey)),ue(e,r.messageNumber);let i=W(e),a=K(i),o=x(a.messageKey,r.nonce,n,U(r));return e.receivingChainKey=a.nextChainKey,e.receivingMessageNumber+=1,o}function Ce(e){if(e.sendingChainKey!==void 0)return e.sendingChainKey;if(e.remoteRatchetPublicKey===void 0)throw new Error("cannot derive sending chain before remote ratchet key is known");let r=v(e.rootKey,e.localRatchetKeyPair.secretKey,e.remoteRatchetPublicKey);return e.rootKey=r.rootKey,e.sendingChainKey=r.chainKey,e.sendingMessageNumber=0,r.chainKey}function He(e,r){let n=v(e.rootKey,e.localRatchetKeyPair.secretKey,r);e.rootKey=n.rootKey,e.receivingChainKey=n.chainKey,e.remoteRatchetPublicKey=r,e.receivingMessageNumber=0,e.previousSendingChainLength=e.sendingMessageNumber,e.localRatchetKeyPair=m();let t=v(e.rootKey,e.localRatchetKeyPair.secretKey,r);e.rootKey=t.rootKey,e.sendingChainKey=t.chainKey,e.sendingMessageNumber=0;}function ue(e,r){if(r<e.receivingMessageNumber)return;if(r-e.receivingMessageNumber>e.maxSkippedMessageKeys)throw new Error("too many skipped message keys requested");let n=e.remoteRatchetPublicKey;if(n!==void 0)for(;e.receivingMessageNumber<r;){let t=W(e),i=K(t);Ge(e,n,e.receivingMessageNumber,i.messageKey),e.receivingChainKey=i.nextChainKey,e.receivingMessageNumber+=1;}}function Ge(e,r,n,t){e.skippedMessageKeys.push({ratchetPublicKeyHex:M(r),messageNumber:n,messageKey:t}),e.skippedMessageKeys.length>e.maxSkippedMessageKeys&&e.skippedMessageKeys.splice(0,e.skippedMessageKeys.length-e.maxSkippedMessageKeys);}function Oe(e,r,n){let t=M(r),i=e.skippedMessageKeys.findIndex(o=>o.ratchetPublicKeyHex===t&&o.messageNumber===n);if(i===-1)return;let[a]=e.skippedMessageKeys.splice(i,1);return a?.messageKey}function W(e){if(e.receivingChainKey===void 0)throw new Error("receiving chain is not initialised");return e.receivingChainKey}function me(e){return e instanceof Uint8Array?e:e.frameBytes}//# sourceMappingURL=index.js.map
+//# sourceMappingURL=index.js.map
+;// CONCATENATED MODULE: ./src/crypto.ts
+
+function encryptNotifyEnvelope(deviceKeyInput, recipient, plaintext) {
+    const deviceKey = parseDeviceKey(deviceKeyInput);
+    const session = sessionForRecipient(deviceKey, recipient);
+    const envelope = Ne(session, plaintext);
+    return {
+        recipient_user_id: recipient.recipient_user_id,
+        recipient_device_id: recipient.recipient_device_id,
+        ciphertext: Buffer.from(envelope.ciphertext).toString('base64'),
+        dr_header: M(envelope.headerBytes)
+    };
+}
+function sessionForRecipient(deviceKey, recipient) {
+    const sessionKey = `${recipient.recipient_user_id}:${recipient.recipient_device_id}`;
+    const existing = deviceKey.sessions?.[sessionKey];
+    if (existing !== undefined) {
+        return decodeSessionState(existing);
+    }
+    return Be({
+        localIdentity: localIdentityFromDeviceKey(deviceKey),
+        recipientBundle: keyBundleFromRecipient(recipient)
+    });
+}
+function localIdentityFromDeviceKey(deviceKey) {
+    const secret = requiredString(deviceKey.identity_key_secret ?? deviceKey.identitySecretKey, 'device_key.identity_key_secret');
+    const secretKey = decodeKeyBytes(secret, 'device_key.identity_key_secret');
+    const explicitPublic = deviceKey.identity_key_public ?? deviceKey.identityPublicKey;
+    return {
+        secretKey,
+        publicKey: explicitPublic === undefined ? Pe(secretKey) : decodeKeyBytes(explicitPublic, 'device_key.identity_key_public')
+    };
+}
+function keyBundleFromRecipient(recipient) {
+    const bundle = recipient.key_bundle;
+    const oneTimePrekey = bundle.one_time_pre_key;
+    const decoded = {
+        identityAgreementKey: decodeKeyBytes(bundle.identity_key, 'key_bundle.identity_key'),
+        identitySigningKey: decodeKeyBytes(bundle.identity_signing_key, 'key_bundle.identity_signing_key'),
+        signedPrekey: {
+            keyId: requiredString(bundle.signed_pre_key.key_id, 'key_bundle.signed_pre_key.key_id'),
+            publicKey: decodeKeyBytes(bundle.signed_pre_key.public_key, 'key_bundle.signed_pre_key.public_key'),
+            signature: decodeKeyBytes(bundle.signed_pre_key.signature, 'key_bundle.signed_pre_key.signature')
+        }
+    };
+    if (oneTimePrekey !== null && oneTimePrekey !== undefined) {
+        return {
+            ...decoded,
+            oneTimePrekey: {
+                keyId: requiredString(oneTimePrekey.key_id, 'key_bundle.one_time_pre_key.key_id'),
+                publicKey: decodeKeyBytes(oneTimePrekey.public_key, 'key_bundle.one_time_pre_key.public_key')
+            }
+        };
+    }
+    return decoded;
+}
+function decodeSessionState(encoded) {
+    const session = {
+        rootKey: decodeKeyBytes(encoded.root_key, 'session.root_key'),
+        localRatchetKeyPair: decodeKeyPair(encoded, 'session.local_ratchet'),
+        sendingMessageNumber: encoded.sending_message_number ?? 0,
+        receivingMessageNumber: encoded.receiving_message_number ?? 0,
+        previousSendingChainLength: encoded.previous_sending_chain_length ?? 0,
+        skippedMessageKeys: (encoded.skipped_message_keys ?? []).map((value) => ({
+            ratchetPublicKeyHex: requiredString(value.ratchet_public_key_hex, 'session.skipped_message_keys.ratchet_public_key_hex'),
+            messageNumber: value.message_number,
+            messageKey: decodeKeyBytes(value.message_key, 'session.skipped_message_keys.message_key')
+        })),
+        maxSkippedMessageKeys: encoded.max_skipped_message_keys ?? 64
+    };
+    if (encoded.remote_ratchet_public_key !== undefined) {
+        session.remoteRatchetPublicKey = decodeKeyBytes(encoded.remote_ratchet_public_key, 'session.remote_ratchet_public_key');
+    }
+    if (encoded.sending_chain_key !== undefined) {
+        session.sendingChainKey = decodeKeyBytes(encoded.sending_chain_key, 'session.sending_chain_key');
+    }
+    if (encoded.receiving_chain_key !== undefined) {
+        session.receivingChainKey = decodeKeyBytes(encoded.receiving_chain_key, 'session.receiving_chain_key');
+    }
+    if (encoded.pending_prekey !== undefined) {
+        session.pendingPrekey =
+            encoded.pending_prekey.one_time_prekey_id === undefined
+                ? {
+                    signedPrekeyId: requiredString(encoded.pending_prekey.signed_prekey_id, 'session.pending_prekey.signed_prekey_id')
+                }
+                : {
+                    signedPrekeyId: requiredString(encoded.pending_prekey.signed_prekey_id, 'session.pending_prekey.signed_prekey_id'),
+                    oneTimePrekeyId: encoded.pending_prekey.one_time_prekey_id
+                };
+    }
+    return session;
+}
+function decodeKeyPair(encoded, label) {
+    return {
+        publicKey: decodeKeyBytes(encoded.local_ratchet_public_key, `${label}_public_key`),
+        secretKey: decodeKeyBytes(encoded.local_ratchet_secret_key, `${label}_secret_key`)
+    };
+}
+function parseDeviceKey(input) {
+    const trimmed = input.trim();
+    const candidates = [trimmed, decodeUtf8IfPossible(trimmed)];
+    for (const candidate of candidates) {
+        if (candidate === undefined) {
+            continue;
+        }
+        try {
+            const parsed = JSON.parse(candidate);
+            if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return parsed;
+            }
+        }
+        catch {
+            // Try the next supported encoding.
+        }
+    }
+    throw new Error('device_key must be JSON or base64url-encoded JSON key material.');
+}
+function decodeUtf8IfPossible(value) {
+    try {
+        return Buffer.from(normaliseBase64(value), 'base64').toString('utf8');
+    }
+    catch {
+        return undefined;
+    }
+}
+function decodeKeyBytes(value, name) {
+    const trimmed = requiredString(value, name);
+    const hex = /^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length % 2 === 0;
+    const bytes = hex ? Buffer.from(trimmed, 'hex') : Buffer.from(normaliseBase64(trimmed), 'base64');
+    if (bytes.length === 0) {
+        throw new Error(`${name} must decode to bytes.`);
+    }
+    return new Uint8Array(bytes);
+}
+function normaliseBase64(value) {
+    return value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+}
+function requiredString(value, name) {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+        throw new Error(`${name} is required.`);
+    }
+    return trimmed;
+}
+
 ;// CONCATENATED MODULE: ./src/templater.ts
 function renderTemplate(template, context) {
     return template.replace(/\{\{\s*(run_id|ref|sha|actor|workflow|repository)\s*\}\}/g, (_match, key) => {
@@ -31487,11 +39993,37 @@ function contextValue(context, key) {
 
 ;// CONCATENATED MODULE: ./src/notify.ts
 
+
+
 async function runNotify(inputs, client, logger) {
     logger.setSecret(inputs.token);
     logger.setSecret(inputs.deviceKey);
     const body = renderTemplate(inputs.template, githubContextFromEnv());
-    throw new Error(`Notify is scaffolded but blocked until @attomus/semafore-crypto is published and integration recipient endpoints are live. Rendered body length: ${body.length}. Client ready: ${Boolean(client)}.`);
+    const recipients = await client.listNotifyRecipients({ target: notifyTargetRequest(inputs) });
+    if (recipients.recipients.length === 0) {
+        throw new Error('notify target resolved to zero recipient devices.');
+    }
+    const request = {
+        message_id: (0,external_node_crypto_.randomUUID)(),
+        envelopes: recipients.recipients.map((recipient) => encryptNotifyEnvelope(inputs.deviceKey, recipient, body)),
+        metadata: {
+            sender_kind: 'integration',
+            integration_kind: 'github_action',
+            sender_display: 'GitHub Actions'
+        }
+    };
+    const response = await client.sendNotification(request);
+    logger.setOutput('message_id', response.message_id);
+}
+function notifyTargetRequest(inputs) {
+    switch (inputs.target.kind) {
+        case 'org':
+            return { kind: 'org' };
+        case 'group':
+            return { kind: 'group', id: inputs.target.id };
+        case 'user':
+            return { kind: 'user', id: inputs.target.id };
+    }
 }
 
 ;// CONCATENATED MODULE: ./src/secrets.ts
