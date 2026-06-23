@@ -2,6 +2,9 @@ export interface SemaForeClientOptions {
   readonly baseUrl: string;
   readonly token: string;
   readonly fetchImpl?: typeof fetch;
+  readonly timeoutMs?: number;
+  readonly maxAttempts?: number;
+  readonly retryDelayMs?: number;
 }
 
 export interface ExecuteRequest {
@@ -67,10 +70,20 @@ export interface NotifySendResponse {
 }
 
 export class SemaForeClient {
+  private static readonly defaultTimeoutMs = 10_000;
+  private static readonly defaultMaxAttempts = 3;
+  private static readonly defaultRetryDelayMs = 250;
+
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
+  private readonly maxAttempts: number;
+  private readonly retryDelayMs: number;
 
   constructor(private readonly options: SemaForeClientOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.timeoutMs = positiveInteger(options.timeoutMs, SemaForeClient.defaultTimeoutMs);
+    this.maxAttempts = positiveInteger(options.maxAttempts, SemaForeClient.defaultMaxAttempts);
+    this.retryDelayMs = nonNegativeInteger(options.retryDelayMs, SemaForeClient.defaultRetryDelayMs);
   }
 
   async registerDevice(_request: unknown): Promise<{ device_id: string }> {
@@ -99,20 +112,48 @@ export class SemaForeClient {
   }
 
   private async postJson<T>(path: string, body: unknown): Promise<T> {
-    const response = await this.fetchImpl(new URL(path, this.options.baseUrl), {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.options.token}`,
-        'content-type': 'application/json',
-        accept: 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
+    const url = new URL(path, this.options.baseUrl);
+    const serializedBody = JSON.stringify(body);
+    let lastError: unknown;
 
-    if (!response.ok) {
-      throw new Error(`SemaFore API request failed with HTTP ${response.status}`);
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      try {
+        const response = await this.fetchImpl(url, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${this.options.token}`,
+            'content-type': 'application/json',
+            accept: 'application/json'
+          },
+          body: serializedBody,
+          signal: AbortSignal.timeout(this.timeoutMs)
+        });
+
+        if (response.ok) {
+          return (await response.json()) as T;
+        }
+
+        if (!shouldRetryStatus(response.status)) {
+          throw new NonRetryableHttpError(`SemaFore API request failed with HTTP ${response.status}`);
+        }
+        if (attempt === this.maxAttempts) {
+          throw new Error(`SemaFore API request failed with HTTP ${response.status}`);
+        }
+        lastError = new Error(`SemaFore API request failed with HTTP ${response.status}`);
+      } catch (error: unknown) {
+        if (error instanceof NonRetryableHttpError) {
+          throw error;
+        }
+        lastError = error;
+        if (attempt === this.maxAttempts) {
+          break;
+        }
+      }
+
+      await sleep(this.retryDelayMs * attempt);
     }
-    return (await response.json()) as T;
+
+    throw new Error(`SemaFore API request failed: ${errorMessage(lastError)}`);
   }
 }
 
@@ -123,3 +164,30 @@ function stringParam(params: Record<string, unknown>, name: string): string {
   }
   return value;
 }
+
+function shouldRetryStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+  return value === undefined || !Number.isInteger(value) || value <= 0 ? fallback : value;
+}
+
+function nonNegativeInteger(value: number | undefined, fallback: number): number {
+  return value === undefined || !Number.isInteger(value) || value < 0 ? fallback : value;
+}
+
+async function sleep(ms: number): Promise<void> {
+  if (ms === 0) {
+    return;
+  }
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+class NonRetryableHttpError extends Error {}

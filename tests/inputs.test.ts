@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseInputs } from '../src/inputs.js';
@@ -82,5 +84,10 @@ describe('input parsing', () => {
       mode: 'bootstrap',
       token: 'sem_bootstrap_token_value_that_is_long'
     });
+  });
+
+  it('keeps bootstrap_token declared in both root and bootstrap action metadata', () => {
+    expect(readFileSync(new URL('../action.yml', import.meta.url), 'utf8')).toContain('bootstrap_token:');
+    expect(readFileSync(new URL('../bootstrap/action.yml', import.meta.url), 'utf8')).toContain('bootstrap_token:');
   });
 });

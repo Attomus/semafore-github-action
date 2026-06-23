@@ -86,7 +86,8 @@ and store it in GitHub Actions secrets. It refuses to overwrite
 
 | Input | Required | Modes | Description |
 |---|---:|---|---|
-| `token` | yes | notify, execute | SemaFore service token stored as a GitHub Actions secret. |
+| `token` | yes | notify, execute, bootstrap via root Action | SemaFore service token stored as a GitHub Actions secret. |
+| `bootstrap_token` | bootstrap via root Action only | bootstrap | Bootstrap-capability token stored as a GitHub Actions secret. |
 | `device_key` | notify only | notify | Device private key stored as a GitHub Actions secret. |
 | `mode` | yes | all | `notify`, `execute`, or `bootstrap`. |
 | `target` | notify only | notify | `org`, `group:<id>`, or `user:<id>`. |
