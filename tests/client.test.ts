@@ -93,4 +93,52 @@ describe('SemaFore client', () => {
       body: JSON.stringify({ target: { kind: 'org' } })
     });
   });
+
+  it('retries transient API failures with per-attempt timeouts', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({})
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ recipients: [] })
+      });
+    const client = new SemaForeClient({
+      baseUrl: 'https://api.example.test',
+      token: 'sem_token_value_that_is_long',
+      fetchImpl,
+      timeoutMs: 50,
+      retryDelayMs: 0
+    });
+
+    await expect(client.listNotifyRecipients({ target: { kind: 'org' } })).resolves.toEqual({ recipients: [] });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
+      signal: expect.any(AbortSignal)
+    });
+  });
+
+  it('does not retry non-transient API failures', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({})
+    });
+    const client = new SemaForeClient({
+      baseUrl: 'https://api.example.test',
+      token: 'sem_token_value_that_is_long',
+      fetchImpl,
+      retryDelayMs: 0
+    });
+
+    await expect(client.listNotifyRecipients({ target: { kind: 'org' } })).rejects.toThrow(
+      'SemaFore API request failed with HTTP 400'
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

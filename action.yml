@@ -7,6 +7,9 @@ inputs:
   token:
     required: true
     description: 'Service token. Store this as a GitHub Actions secret.'
+  bootstrap_token:
+    required: false
+    description: 'Bootstrap-capability token. Required for bootstrap mode when invoking the root Action.'
   device_key:
     required: false
     description: 'Device private key. Required for notify mode and must come from a GitHub Actions secret.'
