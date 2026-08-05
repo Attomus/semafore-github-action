@@ -33,7 +33,9 @@ export { parseInputs };
 function requiredGithubToken(): string {
   const token = githubToken();
   if (!token) {
-    throw new Error('GITHUB_TOKEN with actions: write permission is required for bootstrap mode.');
+    throw new Error(
+      'github_token must be a fine-grained personal access token or GitHub App token with repository Secrets: write permission.'
+    );
   }
   core.setSecret(token);
   return token;

@@ -8,8 +8,8 @@ inputs:
     required: false
     description: 'SemaFore API base URL. Defaults to production.'
   github_token:
-    required: false
-    description: 'GitHub token with actions: write permission. Defaults to GITHUB_TOKEN.'
+    required: true
+    description: 'Fine-grained PAT or GitHub App token with repository Secrets: write permission.'
 runs:
   using: 'node20'
   main: '../dist/index.js'

@@ -1,6 +1,6 @@
 # SemaFore - End-to-End Encrypted Notifications for GitHub Actions
 
-Early-stage GitHub Action for sending end-to-end encrypted SemaFore
+GitHub Action for sending end-to-end encrypted SemaFore
 notifications from GitHub Actions workflows.
 
 The goal is simple: workflow messages should be encrypted in the GitHub runner
@@ -19,22 +19,20 @@ Implemented today:
 - GitHub Actions log masking for tokens and device keys
 - SemaFore execute-mode HTTP client
 - notify-mode recipient resolution, per-device encryption, and ADR-0166 send
-- bootstrap secret-writing helper
+- bootstrap key generation, device registration, and encrypted GitHub secret writing
 - runtime dependency on `@attomus/semafore-crypto`
 - bundled `dist/` output
 - lint, type-check, test, build, and audit workflow
 
 Still in active development:
 
-- live service-token recipient/key-bundle resolution endpoint for notify mode
-- bootstrap integration with the `@attomus/semafore-crypto` package
 - end-to-end staging runs against the SemaFore integration endpoints
 - Marketplace release packaging and `v1` tag movement
 
 The public API, inputs, and examples may change before the first Marketplace
 release.
 
-## Planned Notify Example
+## Notify Example
 
 ```yaml
 name: Notify SemaFore
@@ -56,7 +54,7 @@ jobs:
           template: 'Build {{run_id}} on {{ref}} completed at ${{ github.sha }}'
 ```
 
-## Planned One-Time Bootstrap
+## One-Time Bootstrap
 
 ```yaml
 name: Bootstrap SemaFore
@@ -64,9 +62,9 @@ name: Bootstrap SemaFore
 on:
   workflow_dispatch:
 
-permissions:
-  actions: write
-  contents: read
+concurrency:
+  group: semafore-bootstrap
+  cancel-in-progress: false
 
 jobs:
   bootstrap:
@@ -75,12 +73,18 @@ jobs:
       - uses: attomus/semafore-github-action/bootstrap@v1
         with:
           bootstrap_token: ${{ secrets.SEMAFORE_BOOTSTRAP_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.SEMAFORE_GITHUB_SECRET_TOKEN }}
 ```
 
-Bootstrap is intended to create the repository's SemaFore device key material
-and store it in GitHub Actions secrets. It refuses to overwrite
+Bootstrap creates the repository's SemaFore device key material in the runner
+and stores it in GitHub Actions secrets. It refuses to overwrite
 `SEMAFORE_DEVICE_KEY` if that secret already exists.
+
+`SEMAFORE_GITHUB_SECRET_TOKEN` must be a fine-grained personal access token or
+GitHub App installation token scoped to the repository with `Secrets: write`.
+GitHub does not expose that permission through the workflow's built-in
+`GITHUB_TOKEN`. After bootstrap succeeds, revoke the temporary token and delete
+the `SEMAFORE_GITHUB_SECRET_TOKEN` repository secret.
 
 ## Inputs
 
@@ -96,7 +100,7 @@ and store it in GitHub Actions secrets. It refuses to overwrite
 | `params` | optional | execute | JSON object for the execute action. |
 | `severity` | optional | notify | Optional severity label. |
 | `api_base_url` | optional | all | Override for staging or test servers. |
-| `github_token` | bootstrap only | bootstrap | GitHub token with `actions: write` permission. |
+| `github_token` | bootstrap only | bootstrap | Fine-grained PAT or GitHub App token with repository `Secrets: write` permission. |
 
 ## Execute Actions
 
@@ -107,6 +111,8 @@ and store it in GitHub Actions secrets. It refuses to overwrite
 ## Security Model
 
 - Notification content is encrypted in the GitHub runner before transport.
+- Bootstrap private-key material is generated in the runner and sealed with the
+  repository's GitHub Actions secret-storage public key before upload.
 - Service tokens and device keys must be stored as GitHub Actions secrets.
 - Sensitive input values are registered with the GitHub Actions masking API at
   startup.

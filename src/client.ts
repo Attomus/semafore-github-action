@@ -69,6 +69,27 @@ export interface NotifySendResponse {
   readonly prior_delivery_id?: string;
 }
 
+export interface BootstrapDeviceRegisterRequest {
+  readonly device_kind: 'integration_github_action';
+  readonly display_name: string;
+  readonly identity_key_pub: string;
+  readonly signed_prekey: {
+    readonly key_id: string;
+    readonly key_pub: string;
+    readonly signature: string;
+  };
+  readonly one_time_prekeys: Array<{
+    readonly key_id: string;
+    readonly key_pub: string;
+  }>;
+}
+
+export interface BootstrapDeviceRegisterResponse {
+  readonly device_id: string;
+  readonly registered_at: string;
+  readonly expires_at: string | null;
+}
+
 export class SemaForeClient {
   private static readonly defaultTimeoutMs = 10_000;
   private static readonly defaultMaxAttempts = 3;
@@ -86,8 +107,8 @@ export class SemaForeClient {
     this.retryDelayMs = nonNegativeInteger(options.retryDelayMs, SemaForeClient.defaultRetryDelayMs);
   }
 
-  async registerDevice(_request: unknown): Promise<{ device_id: string }> {
-    return this.postJson('/api/integrations/bootstrap/device/register', _request);
+  async registerDevice(request: BootstrapDeviceRegisterRequest): Promise<BootstrapDeviceRegisterResponse> {
+    return this.postJson('/api/integrations/bootstrap/device/register', request, 1);
   }
 
   async listNotifyRecipients(request: NotifyTargetRequest): Promise<NotifyRecipientResponse> {
@@ -111,12 +132,12 @@ export class SemaForeClient {
     }
   }
 
-  private async postJson<T>(path: string, body: unknown): Promise<T> {
+  private async postJson<T>(path: string, body: unknown, maxAttempts: number = this.maxAttempts): Promise<T> {
     const url = new URL(path, this.options.baseUrl);
     const serializedBody = JSON.stringify(body);
     let lastError: unknown;
 
-    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const response = await this.fetchImpl(url, {
           method: 'POST',
@@ -136,7 +157,7 @@ export class SemaForeClient {
         if (!shouldRetryStatus(response.status)) {
           throw new NonRetryableHttpError(`SemaFore API request failed with HTTP ${response.status}`);
         }
-        if (attempt === this.maxAttempts) {
+        if (attempt === maxAttempts) {
           throw new Error(`SemaFore API request failed with HTTP ${response.status}`);
         }
         lastError = new Error(`SemaFore API request failed with HTTP ${response.status}`);
@@ -145,7 +166,7 @@ export class SemaForeClient {
           throw error;
         }
         lastError = error;
-        if (attempt === this.maxAttempts) {
+        if (attempt === maxAttempts) {
           break;
         }
       }
