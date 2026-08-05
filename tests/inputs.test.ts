@@ -90,4 +90,11 @@ describe('input parsing', () => {
     expect(readFileSync(new URL('../action.yml', import.meta.url), 'utf8')).toContain('bootstrap_token:');
     expect(readFileSync(new URL('../bootstrap/action.yml', import.meta.url), 'utf8')).toContain('bootstrap_token:');
   });
+
+  it('requires an explicit repository Secrets token for the bootstrap sub-action', () => {
+    const bootstrapMetadata = readFileSync(new URL('../bootstrap/action.yml', import.meta.url), 'utf8');
+    expect(bootstrapMetadata).toMatch(/github_token:\n\s+required: true/);
+    expect(bootstrapMetadata).toContain('Secrets: write');
+    expect(bootstrapMetadata).not.toContain('Defaults to GITHUB_TOKEN');
+  });
 });

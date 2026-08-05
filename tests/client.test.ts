@@ -94,6 +94,35 @@ describe('SemaFore client', () => {
     });
   });
 
+  it('does not retry one-time bootstrap registration after an ambiguous server failure', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({})
+    });
+    const client = new SemaForeClient({
+      baseUrl: 'https://api.example.test',
+      token: 'sem_bootstrap_token_value_that_is_long',
+      fetchImpl,
+      retryDelayMs: 0
+    });
+
+    await expect(
+      client.registerDevice({
+        device_kind: 'integration_github_action',
+        display_name: 'GitHub Actions: Attomus/example-repo',
+        identity_key_pub: 'identity-key',
+        signed_prekey: {
+          key_id: 'spk-1',
+          key_pub: 'signed-prekey',
+          signature: 'signature'
+        },
+        one_time_prekeys: [{ key_id: 'opk-1', key_pub: 'one-time-prekey' }]
+      })
+    ).rejects.toThrow('SemaFore API request failed with HTTP 503');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('retries transient API failures with per-attempt timeouts', async () => {
     const fetchImpl = vi
       .fn()

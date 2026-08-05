@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contracts/integrations/bootstrap.device.register.request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["device_kind", "display_name", "identity_key_pub", "signed_prekey", "one_time_prekeys"],
+  "properties": {
+    "device_kind": { "type": "string", "enum": ["integration_github_action"] },
+    "display_name": { "type": "string", "minLength": 1 },
+    "identity_key_pub": { "type": "string", "minLength": 1 },
+    "signed_prekey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_id", "key_pub", "signature"],
+      "properties": {
+        "key_id": { "type": "string", "minLength": 1 },
+        "key_pub": { "type": "string", "minLength": 1 },
+        "signature": { "type": "string", "minLength": 1 }
+      }
+    },
+    "one_time_prekeys": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key_id", "key_pub"],
+        "properties": {
+          "key_id": { "type": "string", "minLength": 1 },
+          "key_pub": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}
