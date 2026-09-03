@@ -122,6 +122,7 @@ the `SEMAFORE_GITHUB_SECRET_TOKEN` repository secret.
 
 Tagged `v1.x.x` releases will become Marketplace versions once the Action is
 ready. The floating `v1` tag will point to the latest compatible v1 release.
+Release history is recorded in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Responsible Disclosure
 
