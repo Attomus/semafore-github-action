@@ -34,6 +34,8 @@ release.
 
 See the [GitHub Actions integration guide](https://docs.semafore.io/integrations/github-actions/)
 for bootstrap, setup, execute-mode reference, and troubleshooting.
+Copy-ready deployment, pull request, release, and security-alert examples are
+available in [SemaFore starter workflows](https://github.com/Attomus/semafore-starter-workflows).
 
 ## Notify Example
 
