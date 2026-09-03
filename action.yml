@@ -31,7 +31,7 @@ inputs:
     description: 'JSON params for the execute action.'
   severity:
     required: false
-    description: 'Optional severity tag.'
+    description: 'Reserved for a future wire-contract revision; omit for v1.'
   api_base_url:
     required: false
     description: 'SemaFore API base URL. Defaults to production.'

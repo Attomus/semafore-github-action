@@ -32,6 +32,9 @@ Still in active development:
 The public API, inputs, and examples may change before the first Marketplace
 release.
 
+See the [GitHub Actions integration guide](https://docs.semafore.io/integrations/github-actions/)
+for bootstrap, setup, execute-mode reference, and troubleshooting.
+
 ## Notify Example
 
 ```yaml
@@ -98,7 +101,7 @@ the `SEMAFORE_GITHUB_SECRET_TOKEN` repository secret.
 | `template` | notify only | notify | Message template. GitHub expressions resolve before the Action runs. |
 | `action` | execute only | execute | `create_thread`, `archive_thread`, or `audit_event`. |
 | `params` | optional | execute | JSON object for the execute action. |
-| `severity` | optional | notify | Optional severity label. |
+| `severity` | optional | notify | Reserved for a future wire-contract revision; omit for v1. |
 | `api_base_url` | optional | all | Override for staging or test servers. |
 | `github_token` | bootstrap only | bootstrap | Fine-grained PAT or GitHub App token with repository `Secrets: write` permission. |
 
